@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0e17" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>DUAL TETRIS — Онлайн дуэль</title>
+  <style>
+    :root {
+      box-sizing: border-box;
+      color-scheme: dark;
+      --bg: #0b0e17;
+      --panel: #111827;
+      --panel-border: #1f2937;
+      --accent: #22c55e;
+      --accent-hover: #16a34a;
+      --blue: #38bdf8;
+      --danger: #f43f5e;
+      --gold: #facc15;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+    }
+    *, *::before, *::after {
+      box-sizing: inherit;
+    }
+    .hidden {
+      display: none !important;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      overflow: hidden;
+      touch-action: none;
+      overscroll-behavior: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #app {
+      position: relative;
+      width: 100%;
+      height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    canvas#game-canvas {
+      width: 100%;
+      height: 100%;
+      max-width: 500px;
+      display: block;
+      touch-action: none;
+    }
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(8, 11, 20, 0.88);
+      backdrop-filter: blur(8px);
+      padding: 16px;
+      z-index: 10;
+      overflow-y: auto;
+      touch-action: pan-y;
+    }
+    .card {
+      width: 100%;
+      max-width: 400px;
+      background: rgba(17, 24, 39, 0.96);
+      border: 1px solid #263147;
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .logo-title {
+      margin: 0;
+      font-size: 28px;
+      font-weight: 900;
+      letter-spacing: 1px;
+      text-align: center;
+      background: linear-gradient(135deg, #22c55e, #38bdf8, #f43f5e);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle {
+      margin: -6px 0 2px;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .field-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .field-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    input.text-input {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid #334155;
+      background: #0b0f19;
+      color: var(--text);
+      font-size: 16px;
+      font-weight: 600;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input.text-input:focus {
+      border-color: var(--blue);
+    }
+    input.code-input {
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      text-align: center;
+      font-size: 18px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+    }
+    button.btn {
+      appearance: none;
+      border: none;
+      border-radius: 12px;
+      padding: 13px 16px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.1s, opacity 0.15s, background 0.15s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: #fff;
+      touch-action: manipulation;
+    }
+    button.btn:active {
+      transform: scale(0.98);
+    }
+    button.btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      box-shadow: 0 4px 15px rgba(34, 197, 94, 0.3);
+    }
+    .btn-blue {
+      background: linear-gradient(135deg, #0ea5e9, #0284c7);
+      box-shadow: 0 4px 15px rgba(14, 165, 233, 0.3);
+    }
+    .btn-secondary {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #e2e8f0;
+    }
+    .btn-danger {
+      background: rgba(244, 63, 94, 0.18);
+      border: 1px solid rgba(244, 63, 94, 0.4);
+      color: #fda4af;
+    }
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #64748b;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    .divider::before, .divider::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: #1e293b;
+    }
+    .rules-box {
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: #cbd5e1;
+    }
+    .rules-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin: 6px 0;
+    }
+    .room-code-banner {
+      background: #090d16;
+      border: 1px dashed #38bdf8;
+      border-radius: 14px;
+      padding: 12px;
+      text-align: center;
+    }
+    .room-code-value {
+      font-size: 32px;
+      font-weight: 900;
+      letter-spacing: 6px;
+      color: #38bdf8;
+      margin: 2px 0;
+    }
+    .room-link-text {
+      font-size: 12px;
+      color: var(--muted);
+      word-break: break-all;
+    }
+    .players-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .player-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: #0d1322;
+      border-radius: 10px;
+      border: 1px solid #1e293b;
+    }
+    .player-name {
+      font-weight: 700;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .badge {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-weight: 700;
+    }
+    .badge-ready {
+      background: rgba(34, 197, 94, 0.2);
+      color: #4ade80;
+    }
+    .badge-wait {
+      background: rgba(148, 163, 184, 0.15);
+      color: #94a3b8;
+    }
+    .error-toast {
+      background: rgba(239, 68, 68, 0.2);
+      border: 1px solid #ef4444;
+      color: #fecaca;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      text-align: center;
+    }
+    .hud-top-bar {
+      position: absolute;
+      top: calc(env(safe-area-inset-top, 0px) + 4px);
+      right: 8px;
+      z-index: 25;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .ping-badge {
+      background: rgba(17, 24, 39, 0.78);
+      border: 1px solid #334155;
+      color: #94a3b8;
+      border-radius: 8px;
+      padding: 4px 7px;
+      font-size: 11px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .icon-btn {
+      background: rgba(17, 24, 39, 0.85);
+      border: 1px solid #334155;
+      color: #cbd5e1;
+      border-radius: 8px;
+      padding: 5px 8px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="hud-top-bar">
+      <span id="ping-badge" class="ping-badge" title="Задержка сети">-- мс</span>
+      <button id="btn-sound" class="icon-btn" title="Звук и вибрация">🔊</button>
+      <button id="btn-leave-match" class="icon-btn" style="display:none" title="Выйти в меню">✕</button>
+    </div>
+
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Главный экран -->
+    <div id="screen-home" class="overlay">
+      <div class="card">
+        <h1 class="logo-title">DUAL TETRIS</h1>
+        <p class="subtitle">Дуэль 1 на 1 по сети на телефонах и ПК</p>
+
+        <div id="home-error" class="error-toast hidden"></div>
+
+        <div class="field-group">
+          <label class="field-label" for="input-name">Твоё имя</label>
+          <input id="input-name" class="text-input" type="text" maxlength="18" placeholder="Например: бубстер" />
+        </div>
+
+        <button id="btn-create-room" class="btn btn-primary">
+          ⚔️ Создать комнату (играть с женой)
+        </button>
+
+        <div class="divider">или войти по коду</div>
+
+        <div class="row">
+          <input id="input-room-code" class="text-input code-input" type="text" maxlength="5" placeholder="ABCDE" />
+          <button id="btn-join-room" class="btn btn-blue" style="white-space:nowrap">Войти</button>
+        </div>
+
+        <div class="divider">одиночный режим</div>
+
+        <button id="btn-bot-match" class="btn btn-secondary">
+          🤖 Тренировка против бота
+        </button>
+
+        <div class="rules-box">
+          <div><strong>Собрал линию — выстрелил волной!</strong></div>
+          <div>Доминирующий цвет линии даёт эффект:</div>
+          <div class="rules-grid">
+            <div>🟩 <b>Лечение</b> (+6 HP)</div>
+            <div>🟦 <b>Заморозка</b> врага</div>
+            <div>🟥 <b>Метеориты</b> по полю</div>
+            <div>🟨 <b>4 Джокера</b> (сквозь блоки!)</div>
+          </div>
+          <div style="margin-top:4px; color:#94a3b8; font-size:11.5px;">
+            📱 <b>Телефон:</b> свайп влево/вправо — двигать, тап или свайп вверх — вращать, свайп вниз — опускать, резкий вниз — сброс.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Экран лобби -->
+    <div id="screen-lobby" class="overlay hidden">
+      <div class="card">
+        <h2 class="logo-title" style="font-size:22px">КОМНАТА ДУЭЛИ</h2>
+        <div class="room-code-banner">
+          <div class="field-label">Код комнаты</div>
+          <div id="lobby-code" class="room-code-value">-----</div>
+          <div id="lobby-link" class="room-link-text"></div>
+        </div>
+
+        <div class="row">
+          <button id="btn-copy-link" class="btn btn-blue" style="flex:1">📋 Скопировать ссылку</button>
+          <button id="btn-share-link" class="btn btn-secondary" title="Отправить ссылку">📤</button>
+        </div>
+
+        <div class="field-group">
+          <div class="field-label">Участники</div>
+          <div id="lobby-players" class="players-list"></div>
+        </div>
+
+        <div id="lobby-countdown" style="text-align:center; font-size:22px; font-weight:900; color:#facc15;" class="hidden"></div>
+
+        <button id="btn-ready" class="btn btn-primary">ГОТОВ К БОЮ!</button>
+        <button id="btn-leave-lobby" class="btn btn-danger">Покинуть комнату</button>
+      </div>
+    </div>
+
+    <!-- Экран результата -->
+    <div id="screen-result" class="overlay hidden">
+      <div class="card" style="text-align:center">
+        <h2 id="result-title" class="logo-title" style="font-size:32px">ПОБЕДА!</h2>
+        <p id="result-subtitle" style="margin:0; color:#cbd5e1; font-size:15px"></p>
+        <div id="result-rematch-status" style="font-size:13px; color:#38bdf8; min-height:18px"></div>
+        <button id="btn-rematch" class="btn btn-primary">🔄 Реванш</button>
+        <button id="btn-result-menu" class="btn btn-secondary">В главное меню</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+/**
+ * Словарь строк интерфейса (раздел 6 ТЗ)
+ */
+export const RU_STRINGS = {
+  title: 'DUAL TETRIS',
+  you: 'ТЫ',
+  opponent: 'СОПЕРНИК',
+  bot: 'БОТ',
+  rage: '🔥 ЯРОСТЬ',
+  comboPrefix: 'комбо ×',
+  frozenPrefix: '❄ ЗАМОРОЖЕН ',
+  waitingForPartner: 'Ожидание второго игрока...',
+  readyBtn: 'ГОТОВ К БОЮ!',
+  cancelReadyBtn: 'Отменить готовность',
+  statusReady: 'Готов',
+  statusNotReady: 'Не готов',
+  statusOffline: 'Отключён',
+  copiedLink: '✅ Ссылка скопирована!',
+  copyLink: '📋 Скопировать ссылку',
+  countdownPrefix: 'Старт через ',
+  pausedBanner: '⏸ Пауза: соперник переподключается',
+  victory: 'ПОБЕДА!',
+  defeat: 'ПОРАЖЕНИЕ',
+  draw: 'НИЧЬЯ',
+  reasonKoVictory: 'Ты разгромил поле соперника!',
+  reasonKoDefeat: 'Твоё здоровье упало до нуля.',
+  reasonForfeitVictory: 'Соперник покинул бой.',
+  reasonForfeitDefeat: 'Связь с комнатой потеряна.',
+  reasonDraw: 'Оба игрока пали одновременно!',
+  rematchWaiting: 'Ожидание ответа соперника на реванш...',
+  rematchRequestedByOpponent: 'Соперник предлагает реванш!',
+  msgHeal: (who: string, amount: number) => `${who}: 🟩 лечение +${amount}`,
+  msgJokers: (who: string, count: number) => `${who}: 🟨 ${count} джокера!`,
+  msgWaveShot: (who: string, pow: number) => `${who}: выстрел ×${pow}`,
+  msgWaveCollide: '⚡ Волны столкнулись!',
+  msgFreeze: '❄ Заморозка управления!',
+  msgMeteor: '☄ Метеоритный дождь!',
+  msgImpact: (who: string, dmg: number, rows: number) =>
+    `${who} попал −${dmg} HP, рядов: ${rows}`,
+  msgOverflow: (who: string, dmg: number) => `${who}: переполнение −${dmg} HP`,
+  errRoomNotFound: 'Комната с таким кодом не найдена',
+  errRoomFull: 'В этой комнате уже два игрока',
+  errDisconnected: 'Соединение с сервером потеряно, переподключаемся...',
+};
+
+export type AppStrings = typeof RU_STRINGS;
