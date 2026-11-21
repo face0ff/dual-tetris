@@ -7,11 +7,13 @@ import {
   getLeagueByRating,
   type AbilityRarity,
   type AbilitySlots,
+  type BlockSkinId,
   type BotDifficulty,
   type ChestRewardResult,
   type ChestTier,
   type DailyQuestProgress,
   type GameConfig,
+  type LeaderboardEntry,
   type PlayerDailyState,
   type PlayerProfileData,
 } from '@dual-tetris/core';
@@ -148,6 +150,14 @@ export class ProfileStore {
       profile.stats.abilityUsage = {};
       changed = true;
     }
+    if (!profile.ownedSkins || profile.ownedSkins.length === 0) {
+      profile.ownedSkins = ['classic'];
+      changed = true;
+    }
+    if (!profile.equippedSkin) {
+      profile.equippedSkin = 'classic';
+      changed = true;
+    }
     return changed;
   }
 
@@ -205,6 +215,8 @@ export class ProfileStore {
         league: getLeagueByRating(startRating, this.config).id,
         ownedAbilities: initialOwned,
         loadout: [...this.config.defaultLoadout],
+        ownedSkins: ['classic'],
+        equippedSkin: 'classic',
         stats: {
           wins: 0,
           losses: 0,
@@ -297,6 +309,66 @@ export class ProfileStore {
     profile.coins += bet;
     this.recordTransaction(playerId, bet, 'coin_duel_refund', roomCode);
     this.save();
+  }
+
+  public buyOrEquipSkin(
+    playerId: string,
+    skinId: BlockSkinId,
+    requestId: string
+  ): { ok: true; profile: PlayerProfileData } | { ok: false; errorCode: string } {
+    const profile = this.data.profiles[playerId];
+    if (!profile) {
+      return { ok: false, errorCode: 'PROFILE_NOT_FOUND' };
+    }
+    this.ensureProfileFields(profile);
+
+    const skinDef = this.config.economy.skins[skinId];
+    if (!skinDef) {
+      return { ok: false, errorCode: 'SKIN_NOT_FOUND' };
+    }
+
+    // Если скин уже куплен — просто надеваем его
+    if (profile.ownedSkins.includes(skinId)) {
+      profile.equippedSkin = skinId;
+      this.save();
+      return { ok: true, profile: this.cloneProfile(profile) };
+    }
+
+    const reqKey = `skin:${playerId}:${requestId}`;
+    if (this.data.processedRequests[reqKey]) {
+      return { ok: true, profile: this.cloneProfile(profile) };
+    }
+
+    if (profile.coins < skinDef.price) {
+      return { ok: false, errorCode: 'NOT_ENOUGH_COINS' };
+    }
+
+    this.data.processedRequests[reqKey] = true;
+    profile.coins -= skinDef.price;
+    profile.ownedSkins.push(skinId);
+    profile.equippedSkin = skinId;
+    this.recordTransaction(playerId, -skinDef.price, `buy_skin:${skinId}`, requestId);
+    this.save();
+
+    return { ok: true, profile: this.cloneProfile(profile) };
+  }
+
+  public getLeaderboard(limit = 15): LeaderboardEntry[] {
+    const all = Object.values(this.data.profiles);
+    for (const p of all) {
+      this.ensureProfileFields(p);
+    }
+    all.sort((a, b) => (b.rating ?? 500) - (a.rating ?? 500) || b.stats.wins - a.stats.wins);
+    return all.slice(0, limit).map((p, idx) => ({
+      rank: idx + 1,
+      playerId: p.playerId,
+      name: p.name,
+      avatar: p.avatar,
+      rating: p.rating ?? 500,
+      league: p.league,
+      wins: p.stats.wins,
+      matches: p.stats.matches,
+    }));
   }
 
   public consumeBossAttempt(
@@ -731,6 +803,8 @@ export class ProfileStore {
         Object.entries(p.ownedAbilities).map(([k, v]) => [k, { ...v }])
       ),
       loadout: [...p.loadout],
+      ownedSkins: [...(p.ownedSkins ?? ['classic'])],
+      equippedSkin: p.equippedSkin ?? 'classic',
       stats: {
         ...p.stats,
         abilityUsage: { ...(p.stats.abilityUsage ?? {}) },

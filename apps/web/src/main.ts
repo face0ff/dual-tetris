@@ -7,6 +7,7 @@ import {
   getLowestEmptyRow,
   rotateMatrixCW,
   type ActivePiece,
+  type BlockSkinId,
   type BotDifficulty,
   type ChestRewardResult,
   type ChestTier,
@@ -14,6 +15,7 @@ import {
   type GameConfig,
   type GameEvent,
   type InputAction,
+  type LeaderboardEntry,
   type PieceShape,
   type PlayerProfileData,
   type RoomPlayerInfo,
@@ -146,6 +148,7 @@ const screenChests = document.getElementById('screen-chests')!;
 const btnCloseChests = document.getElementById('btn-close-chests') as HTMLButtonElement;
 const chestsCoinsEl = document.getElementById('chests-coins')!;
 const chestRewardBoxEl = document.getElementById('chest-reward-box')!;
+const skinsGridEl = document.getElementById('skins-grid')!;
 
 const screenBots = document.getElementById('screen-bots')!;
 const btnCloseBots = document.getElementById('btn-close-bots') as HTMLButtonElement;
@@ -173,6 +176,7 @@ const screenStats = document.getElementById('screen-stats')!;
 const btnCloseStats = document.getElementById('btn-close-stats') as HTMLButtonElement;
 const statsSummaryBoxEl = document.getElementById('stats-summary-box')!;
 const statsLeaguesListEl = document.getElementById('stats-leagues-list')!;
+const statsLeaderboardListEl = document.getElementById('stats-leaderboard-list')!;
 const statsAbilitiesBoxEl = document.getElementById('stats-abilities-box')!;
 const statsHistoryListEl = document.getElementById('stats-history-list')!;
 
@@ -394,6 +398,46 @@ function renderProfileUI(): void {
     }
   }
 
+  // Отрисовка магазина визуальных скинов кубиков
+  skinsGridEl.innerHTML = '';
+  const ownedSkins = myProfile.ownedSkins ?? ['classic'];
+  const equippedSkin = myProfile.equippedSkin ?? 'classic';
+  const skinIcons: Record<BlockSkinId, string> = {
+    classic: '🟩',
+    crystal: '💎',
+    neon: '✨',
+    cyber: '⚡',
+  };
+  for (const sk of Object.values(config.economy.skins)) {
+    const isOwned = ownedSkins.includes(sk.id);
+    const isEq = equippedSkin === sk.id;
+    const card = document.createElement('div');
+    card.className = 'chest-card';
+    if (isEq) card.style.borderColor = '#22c55e';
+    card.innerHTML = `
+      <div style="font-size:22px">${skinIcons[sk.id] ?? '🟩'}</div>
+      <div style="font-weight:800;font-size:12.5px">${sk.name}</div>
+      <div style="font-size:10.5px;color:#94a3b8">${sk.description}</div>
+    `;
+    const btn = document.createElement('button');
+    btn.style.width = '100%';
+    btn.style.padding = '7px';
+    btn.style.fontSize = '12px';
+    btn.className = isEq ? 'btn btn-primary' : isOwned ? 'btn btn-secondary' : 'btn btn-blue';
+    btn.disabled = isEq;
+    btn.textContent = isEq ? 'Выбран ✓' : isOwned ? 'Выбрать' : `🪙 ${sk.price}`;
+    btn.addEventListener('click', () => {
+      sendMsg({
+        type: 'buy_or_equip_skin',
+        skinId: sk.id,
+        requestId: `sk_${myPlayerId}_${sk.id}_${Date.now()}`,
+      });
+      sfx.rotate();
+    });
+    card.append(btn);
+    skinsGridEl.append(card);
+  }
+
   // Обновление попыток на Босса и статуса рекламы (Фаза 3)
   if (myProfile.daily) {
     const rem = myProfile.daily.bossAttemptsRemaining;
@@ -579,6 +623,7 @@ btnCloseQuests.addEventListener('click', () => {
 
 btnOpenStats.addEventListener('click', () => {
   renderProfileUI();
+  sendMsg({ type: 'get_leaderboard' });
   screenStats.classList.remove('hidden');
 });
 btnCloseStats.addEventListener('click', () => {
@@ -1037,6 +1082,11 @@ function connectWebSocket(onOpen?: () => void): void {
       return;
     }
 
+    if (msg.type === 'leaderboard') {
+      renderLeaderboard(msg.entries);
+      return;
+    }
+
     if (msg.type === 'matchmaking_status') {
       mmSearching = msg.searching;
       btnStartMm.classList.toggle('hidden', mmSearching);
@@ -1458,11 +1508,94 @@ canvas.addEventListener(
   { passive: false }
 );
 
-// Отрисовка на Canvas 2D
+function renderLeaderboard(entries: LeaderboardEntry[]): void {
+  statsLeaderboardListEl.innerHTML = '';
+  if (entries.length === 0) {
+    statsLeaderboardListEl.innerHTML = `<div style="color:#64748b;font-size:12px">Пока нет игроков в рейтинге.</div>`;
+    return;
+  }
+  for (const e of entries) {
+    const lg = getLeagueByRating(e.rating, config);
+    const isMe = e.playerId === myPlayerId;
+    const row = document.createElement('div');
+    row.className = 'ability-item';
+    if (isMe) row.style.borderColor = '#38bdf8';
+    const medal = e.rank === 1 ? '🥇' : e.rank === 2 ? '🥈' : e.rank === 3 ? '🥉' : `#${e.rank}`;
+    row.innerHTML = `
+      <div style="font-weight:800;font-size:12.5px;display:flex;align-items:center;gap:6px">
+        <span>${medal}</span>
+        <span>${e.avatar}</span>
+        <span>${e.name}${isMe ? ' (Ты)' : ''}</span>
+      </div>
+      <div style="font-size:12px;font-weight:800;color:#fde047">
+        ${lg.icon} ${e.rating} 🏆
+      </div>
+    `;
+    statsLeaderboardListEl.append(row);
+  }
+}
+
+// Отрисовка клетки на Canvas 2D с учётом выбранного визуального скина (Классика, 3D-Кристалл, Неон, Кибер)
 function drawCell(x: number, y: number, colorIdx: number, alpha = 1): void {
+  const col = COL[colorIdx] || '#fff';
+  const skin: BlockSkinId = myProfile?.equippedSkin ?? 'classic';
+  const bx = x + 1;
+  const by = y + 1;
+  const bw = CX - 2;
+  const bh = CY - 2;
+
+  if (skin === 'classic') {
+    g2.globalAlpha = alpha;
+    g2.fillStyle = col;
+    g2.fillRect(bx, by, bw, bh);
+    g2.globalAlpha = 1;
+    return;
+  }
+
+  if (skin === 'crystal') {
+    g2.globalAlpha = alpha;
+    g2.fillStyle = col;
+    g2.fillRect(bx, by, bw, bh);
+    // Верхний/левый 3D-блик
+    g2.fillStyle = 'rgba(255,255,255,0.36)';
+    g2.fillRect(bx, by, bw, 3);
+    g2.fillRect(bx, by, 3, bh);
+    // Нижняя/правая 3D-тень
+    g2.fillStyle = 'rgba(0,0,0,0.35)';
+    g2.fillRect(bx, by + bh - 3, bw, 3);
+    g2.fillRect(bx + bw - 3, by, 3, bh);
+    // Внутренняя грань кристалла
+    g2.fillStyle = 'rgba(255,255,255,0.16)';
+    g2.fillRect(bx + 4, by + 4, Math.max(2, bw - 8), Math.max(2, bh - 8));
+    g2.globalAlpha = 1;
+    return;
+  }
+
+  if (skin === 'neon') {
+    g2.globalAlpha = alpha * 0.24;
+    g2.fillStyle = col;
+    g2.fillRect(bx, by, bw, bh);
+    g2.globalAlpha = alpha;
+    g2.strokeStyle = col;
+    g2.lineWidth = 2;
+    g2.strokeRect(bx + 1, by + 1, bw - 2, bh - 2);
+    g2.fillStyle = '#ffffff';
+    g2.fillRect(bx + bw / 2 - 2, by + bh / 2 - 2, 4, 4);
+    g2.globalAlpha = 1;
+    return;
+  }
+
+  // skin === 'cyber'
   g2.globalAlpha = alpha;
-  g2.fillStyle = COL[colorIdx] || '#fff';
-  g2.fillRect(x + 1, y + 1, CX - 2, CY - 2);
+  g2.fillStyle = '#0f172a';
+  g2.fillRect(bx, by, bw, bh);
+  g2.strokeStyle = col;
+  g2.lineWidth = 1.6;
+  g2.strokeRect(bx + 0.8, by + 0.8, bw - 1.6, bh - 1.6);
+  g2.fillStyle = col;
+  g2.fillRect(bx + 3, by + 3, Math.max(2, bw - 6), Math.max(2, bh - 6));
+  g2.fillStyle = 'rgba(255,255,255,0.75)';
+  g2.fillRect(bx + bw / 2 - 2.5, by + bh / 2 - 2.5, 5, 5);
   g2.globalAlpha = 1;
 }
 

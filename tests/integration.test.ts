@@ -524,6 +524,21 @@ describe('Интеграционные и нагрузочные тесты се
     expect(p1After.matchHistory[0].bet).toBe(100);
     expect(p1After.matchHistory[0].coinsDelta).toBe(100); // чистая прибыль +100
 
+    // 4. Покупка и экипировка визуального скина кубиков (3D-Кристалл за 150 монет) + Таблица лидеров
+    c1.messages.length = 0;
+    c1.send({ type: 'buy_or_equip_skin', skinId: 'crystal', requestId: 'skin-req-1' });
+    c1.send({ type: 'buy_or_equip_skin', skinId: 'crystal', requestId: 'skin-req-1' });
+    const skinProf = await c1.waitFor('profile');
+    expect(skinProf.profile.equippedSkin).toBe('crystal');
+    expect(skinProf.profile.ownedSkins).toContain('crystal');
+    expect(skinProf.profile.coins).toBe(400 - 150);
+
+    c1.send({ type: 'get_leaderboard' });
+    const lbMsg = await c1.waitFor('leaderboard');
+    expect(lbMsg.entries.length).toBeGreaterThanOrEqual(2);
+    expect(lbMsg.entries[0].playerId).toBe('duel_p1');
+    expect(lbMsg.entries[0].rating).toBe(516);
+
     c1.close();
     c2.close();
   });

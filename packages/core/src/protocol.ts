@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import type { AbilityRarity, BotDifficulty, ChestTier, GameConfig, LeagueTier } from './config.js';
+import type {
+  AbilityRarity,
+  BlockSkinId,
+  BotDifficulty,
+  ChestTier,
+  GameConfig,
+  LeagueTier,
+} from './config.js';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -8,6 +15,7 @@ export type InputAction = z.infer<typeof InputActionSchema>;
 
 export const ChestTierSchema = z.enum(['wooden', 'silver', 'gold', 'legendary']);
 export const BotDifficultySchema = z.enum(['easy', 'medium', 'hard', 'boss']);
+export const BlockSkinIdSchema = z.enum(['classic', 'crystal', 'neon', 'cyber']);
 
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
@@ -89,6 +97,14 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('cancel_matchmaking'),
+  }),
+  z.object({
+    type: z.literal('buy_or_equip_skin'),
+    skinId: BlockSkinIdSchema,
+    requestId: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal('get_leaderboard'),
   }),
   z.object({
     type: z.literal('activate_ability'),
@@ -193,9 +209,22 @@ export interface PlayerProfileData {
   league: LeagueTier;
   ownedAbilities: Record<string, OwnedAbility>;
   loadout: [string | null, string | null, string | null, string | null];
+  ownedSkins: BlockSkinId[];
+  equippedSkin: BlockSkinId;
   stats: PlayerStats;
   daily: PlayerDailyState;
   matchHistory: MatchHistoryEntry[];
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  playerId: string;
+  name: string;
+  avatar: string;
+  rating: number;
+  league: LeagueTier;
+  wins: number;
+  matches: number;
 }
 
 export interface ChestRewardResult {
@@ -323,6 +352,10 @@ export type ServerMessage =
       type: 'chest_opened';
       reward: ChestRewardResult;
       profile: PlayerProfileData;
+    }
+  | {
+      type: 'leaderboard';
+      entries: LeaderboardEntry[];
     }
   | {
       type: 'pong';

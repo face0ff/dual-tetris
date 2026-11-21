@@ -20,6 +20,14 @@ export type AbilityEffectType =
 export type ChestTier = 'wooden' | 'silver' | 'gold' | 'legendary';
 export type BotDifficulty = 'easy' | 'medium' | 'hard' | 'boss';
 export type LeagueTier = 'bronze' | 'silver' | 'gold' | 'platinum' | 'diamond';
+export type BlockSkinId = 'classic' | 'crystal' | 'neon' | 'cyber';
+
+export interface BlockSkinDefinition {
+  id: BlockSkinId;
+  name: string;
+  price: number;
+  description: string;
+}
 
 export interface LeagueDefinition {
   id: LeagueTier;
@@ -70,6 +78,7 @@ export interface EconomyConfig {
   bossFirstWinChest: ChestTier;
   chests: Record<ChestTier, ChestDefinition>;
   leagues: Record<LeagueTier, LeagueDefinition>;
+  skins: Record<BlockSkinId, BlockSkinDefinition>;
 }
 
 export interface AbilityDefinition {
@@ -470,6 +479,32 @@ export const DEFAULT_CONFIG: GameConfig = {
         minRating: 2500,
         maxRating: null,
         botDifficulty: 'boss',
+      },
+    },
+    skins: {
+      classic: {
+        id: 'classic',
+        name: 'Классика',
+        price: 0,
+        description: 'Чистые минималистичные блоки',
+      },
+      crystal: {
+        id: 'crystal',
+        name: '3D-Кристалл',
+        price: 150,
+        description: 'Объёмные блоки с 3D-гранями и бликом',
+      },
+      neon: {
+        id: 'neon',
+        name: 'Неон',
+        price: 300,
+        description: 'Светящийся неоновый контур с тёмным центром',
+      },
+      cyber: {
+        id: 'cyber',
+        name: 'Кибер-Ядро',
+        price: 500,
+        description: 'Футуристичные блоки с ярким энерго-ядром внутри',
       },
     },
   },

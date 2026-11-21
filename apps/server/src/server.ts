@@ -516,6 +516,26 @@ export function createDualTetrisServer(
         return;
       }
 
+      if (msg.type === 'buy_or_equip_skin') {
+        const pid = socketToPlayerId.get(ws);
+        if (!pid) {
+          send(ws, { type: 'error', code: 'PROFILE_NOT_FOUND' });
+          return;
+        }
+        const res = store.buyOrEquipSkin(pid, msg.skinId, msg.requestId);
+        if (!res.ok) {
+          send(ws, { type: 'error', code: res.errorCode });
+          return;
+        }
+        send(ws, { type: 'profile', profile: res.profile });
+        return;
+      }
+
+      if (msg.type === 'get_leaderboard') {
+        send(ws, { type: 'leaderboard', entries: store.getLeaderboard(15) });
+        return;
+      }
+
       if (msg.type === 'cancel_matchmaking') {
         removeFromMatchmaking(ws);
         send(ws, { type: 'matchmaking_status', searching: false, bet: 0 });
