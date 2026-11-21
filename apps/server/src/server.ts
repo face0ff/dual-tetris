@@ -19,6 +19,8 @@ import {
   type BotDifficulty,
   type GameConfig,
   type MatchState,
+  type OnlinePlayerInfo,
+  type OpenChallengeInfo,
   type RoomPlayerInfo,
   type RoomState,
   type ServerMessage,
@@ -121,18 +123,72 @@ export function createDualTetrisServer(
   const rooms = new Map<string, Room>();
   const socketToRoom = new Map<WebSocket, { room: Room; playerIndex: 0 | 1 }>();
   const socketToPlayerId = new Map<WebSocket, string>();
+  const playerIdToSocket = new Map<string, WebSocket>();
+  const openChallenges = new Map<string, { info: OpenChallengeInfo; hostWs: WebSocket }>();
   const matchmakingQueue: MatchmakingEntry[] = [];
+
+  const send = (ws: WebSocket | null, msg: ServerMessage) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+    }
+  };
+
+  const buildArenaState = (): Extract<ServerMessage, { type: 'arena_state' }> => {
+    const challenges: OpenChallengeInfo[] = [];
+    for (const [cid, ch] of openChallenges.entries()) {
+      if (ch.hostWs.readyState !== WebSocket.OPEN) {
+        openChallenges.delete(cid);
+        continue;
+      }
+      if (!ch.info.targetPlayerId) {
+        challenges.push({ ...ch.info });
+      }
+    }
+
+    const onlinePlayers: OnlinePlayerInfo[] = [];
+    for (const [pid, sock] of playerIdToSocket.entries()) {
+      if (sock.readyState !== WebSocket.OPEN) continue;
+      const prof = store.getOrCreateProfile(pid);
+      const binding = socketToRoom.get(sock);
+      onlinePlayers.push({
+        playerId: prof.playerId,
+        name: prof.name,
+        avatar: prof.avatar,
+        rating: prof.rating,
+        league: prof.league,
+        inMatch: Boolean(binding && binding.room.state === 'playing'),
+      });
+    }
+
+    return {
+      type: 'arena_state',
+      challenges,
+      onlinePlayers,
+    };
+  };
+
+  const broadcastArenaState = () => {
+    const stateMsg = buildArenaState();
+    for (const client of wss.clients) {
+      send(client, stateMsg);
+    }
+  };
+
+  const removeChallengesBySocket = (ws: WebSocket) => {
+    let removed = false;
+    for (const [cid, ch] of openChallenges.entries()) {
+      if (ch.hostWs === ws) {
+        openChallenges.delete(cid);
+        removed = true;
+      }
+    }
+    if (removed) broadcastArenaState();
+  };
 
   const removeFromMatchmaking = (ws: WebSocket) => {
     const idx = matchmakingQueue.findIndex((e) => e.ws === ws);
     if (idx !== -1) {
       matchmakingQueue.splice(idx, 1);
-    }
-  };
-
-  const send = (ws: WebSocket | null, msg: ServerMessage) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(msg));
     }
   };
 
@@ -448,7 +504,9 @@ export function createDualTetrisServer(
       if (msg.type === 'auth_profile') {
         const profile = store.getOrCreateProfile(msg.playerId, msg.name, msg.avatar);
         socketToPlayerId.set(ws, profile.playerId);
+        playerIdToSocket.set(profile.playerId, ws);
         send(ws, { type: 'profile', profile });
+        broadcastArenaState();
         return;
       }
 
@@ -532,7 +590,308 @@ export function createDualTetrisServer(
       }
 
       if (msg.type === 'get_leaderboard') {
-        send(ws, { type: 'leaderboard', entries: store.getLeaderboard(15) });
+        const entries = store.getLeaderboard(15).map((e) => ({
+          ...e,
+          online: playerIdToSocket.has(e.playerId),
+        }));
+        send(ws, { type: 'leaderboard', entries });
+        return;
+      }
+
+      if (msg.type === 'get_arena_state') {
+        send(ws, buildArenaState());
+        return;
+      }
+
+      if (msg.type === 'create_challenge') {
+        const pid = socketToPlayerId.get(ws);
+        if (!pid) {
+          send(ws, { type: 'error', code: 'PROFILE_NOT_FOUND' });
+          return;
+        }
+        const bet = msg.bet ?? 0;
+        if (!config.economy.coinDuelBets.includes(bet)) {
+          send(ws, { type: 'error', code: 'INVALID_BET', message: 'Недопустимая ставка' });
+          return;
+        }
+        if (!store.canAffordBet(pid, bet)) {
+          send(ws, {
+            type: 'error',
+            code: 'NOT_ENOUGH_COINS_FOR_BET',
+            message: `Недостаточно монет для ставки ${bet} 🪙`,
+          });
+          return;
+        }
+        removeChallengesBySocket(ws);
+        const prof = store.getOrCreateProfile(pid);
+        const cid = `ch_${crypto.randomBytes(6).toString('hex')}`;
+        openChallenges.set(cid, {
+          hostWs: ws,
+          info: {
+            id: cid,
+            hostPlayerId: prof.playerId,
+            hostName: prof.name,
+            hostAvatar: prof.avatar,
+            hostRating: prof.rating,
+            hostLeague: prof.league,
+            bet,
+            createdAt: Date.now(),
+          },
+        });
+        broadcastArenaState();
+        return;
+      }
+
+      if (msg.type === 'cancel_challenge') {
+        removeChallengesBySocket(ws);
+        return;
+      }
+
+      if (msg.type === 'send_direct_duel') {
+        const pid = socketToPlayerId.get(ws);
+        if (!pid) {
+          send(ws, { type: 'error', code: 'PROFILE_NOT_FOUND' });
+          return;
+        }
+        if (pid === msg.targetPlayerId) return;
+        const bet = msg.bet ?? 0;
+        if (!config.economy.coinDuelBets.includes(bet)) {
+          send(ws, { type: 'error', code: 'INVALID_BET', message: 'Недопустимая ставка' });
+          return;
+        }
+        if (!store.canAffordBet(pid, bet)) {
+          send(ws, {
+            type: 'error',
+            code: 'NOT_ENOUGH_COINS_FOR_BET',
+            message: `Недостаточно монет для ставки ${bet} 🪙`,
+          });
+          return;
+        }
+        const targetWs = playerIdToSocket.get(msg.targetPlayerId);
+        if (!targetWs || targetWs.readyState !== WebSocket.OPEN) {
+          send(ws, {
+            type: 'error',
+            code: 'TARGET_OFFLINE',
+            message: 'Этот игрок сейчас не в сети',
+          });
+          return;
+        }
+        const targetBinding = socketToRoom.get(targetWs);
+        if (targetBinding && targetBinding.room.state === 'playing') {
+          send(ws, {
+            type: 'error',
+            code: 'TARGET_BUSY',
+            message: 'Игрок сейчас находится в другом бою',
+          });
+          return;
+        }
+
+        const prof = store.getOrCreateProfile(pid);
+        const cid = `duel_${crypto.randomBytes(6).toString('hex')}`;
+        const info: OpenChallengeInfo = {
+          id: cid,
+          hostPlayerId: prof.playerId,
+          hostName: prof.name,
+          hostAvatar: prof.avatar,
+          hostRating: prof.rating,
+          hostLeague: prof.league,
+          bet,
+          targetPlayerId: msg.targetPlayerId,
+          createdAt: Date.now(),
+        };
+        openChallenges.set(cid, { hostWs: ws, info });
+        send(targetWs, { type: 'incoming_duel', challenge: info });
+        return;
+      }
+
+      if (msg.type === 'decline_direct_duel') {
+        const ch = openChallenges.get(msg.challengeId);
+        if (ch) {
+          openChallenges.delete(msg.challengeId);
+          const pid = socketToPlayerId.get(ws);
+          const prof = pid ? store.getOrCreateProfile(pid) : null;
+          send(ch.hostWs, {
+            type: 'duel_declined',
+            byName: prof?.name ?? 'Игрок',
+          });
+        }
+        return;
+      }
+
+      if (msg.type === 'accept_challenge') {
+        const pid = socketToPlayerId.get(ws);
+        if (!pid) {
+          send(ws, { type: 'error', code: 'PROFILE_NOT_FOUND' });
+          return;
+        }
+        const ch = openChallenges.get(msg.challengeId);
+        if (!ch || ch.hostWs.readyState !== WebSocket.OPEN) {
+          openChallenges.delete(msg.challengeId);
+          broadcastArenaState();
+          send(ws, {
+            type: 'error',
+            code: 'CHALLENGE_EXPIRED',
+            message: 'Вызов уже неактуален',
+          });
+          return;
+        }
+        if (ch.hostWs === ws || ch.info.hostPlayerId === pid) return;
+
+        const bet = ch.info.bet;
+        if (!store.canAffordBet(pid, bet)) {
+          send(ws, {
+            type: 'error',
+            code: 'NOT_ENOUGH_COINS_FOR_BET',
+            message: `Недостаточно монет для принятия ставки ${bet} 🪙`,
+          });
+          return;
+        }
+        if (!store.canAffordBet(ch.info.hostPlayerId, bet)) {
+          openChallenges.delete(msg.challengeId);
+          broadcastArenaState();
+          send(ws, {
+            type: 'error',
+            code: 'CHALLENGE_EXPIRED',
+            message: 'У создателя вызова недостаточно монет',
+          });
+          return;
+        }
+
+        openChallenges.delete(msg.challengeId);
+        removeChallengesBySocket(ch.hostWs);
+        removeChallengesBySocket(ws);
+        removeFromMatchmaking(ch.hostWs);
+        removeFromMatchmaking(ws);
+        detachSocket(ch.hostWs, true);
+        detachSocket(ws, true);
+
+        const guestProf = store.getOrCreateProfile(pid);
+        const code = generateRoomCode(new Set(rooms.keys()));
+        const slot0: PlayerSlot = {
+          index: 0,
+          playerId: ch.info.hostPlayerId,
+          name: ch.info.hostName,
+          sessionToken: crypto.randomBytes(16).toString('hex'),
+          ws: ch.hostWs,
+          ready: true,
+          connected: true,
+          isBot: false,
+          rematchVote: false,
+          disconnectedAt: null,
+          inputTimestamps: [],
+        };
+        const slot1: PlayerSlot = {
+          index: 1,
+          playerId: guestProf.playerId,
+          name: guestProf.name,
+          sessionToken: crypto.randomBytes(16).toString('hex'),
+          ws,
+          ready: true,
+          connected: true,
+          isBot: false,
+          rematchVote: false,
+          disconnectedAt: null,
+          inputTimestamps: [],
+        };
+        const room: Room = {
+          code,
+          state: 'lobby',
+          players: [slot0, slot1],
+          match: null,
+          bot: null,
+          isRanked: true,
+          bet,
+          betReserved: [false, false],
+          countdownRemainingSec: 0,
+          paused: false,
+          pauseRemainingSec: 0,
+          lastActivityAt: Date.now(),
+          tickCounter: 0,
+          dirtySnapshot: false,
+          config,
+        };
+        rooms.set(code, room);
+        socketToRoom.set(ch.hostWs, { room, playerIndex: 0 });
+        socketToRoom.set(ws, { room, playerIndex: 1 });
+        startMatchInRoom(room);
+        broadcastArenaState();
+        return;
+      }
+
+      if (msg.type === 'start_ranked_bot') {
+        const pid = socketToPlayerId.get(ws);
+        const bet = msg.bet ?? 0;
+        if (!config.economy.coinDuelBets.includes(bet)) {
+          send(ws, { type: 'error', code: 'INVALID_BET', message: 'Недопустимая ставка' });
+          return;
+        }
+        if (pid && !store.canAffordBet(pid, bet)) {
+          send(ws, {
+            type: 'error',
+            code: 'NOT_ENOUGH_COINS_FOR_BET',
+            message: `Недостаточно монет для ставки ${bet} 🪙`,
+          });
+          return;
+        }
+        removeChallengesBySocket(ws);
+        removeFromMatchmaking(ws);
+        detachSocket(ws, true);
+
+        const prof = pid ? store.getOrCreateProfile(pid) : null;
+        const rating = prof?.rating ?? config.economy.startingRating;
+        const leagueDef = getLeagueByRating(rating, config);
+        const diff = leagueDef.botDifficulty;
+        const rivalNames = ['КиберТетрис', 'НеонБлок', 'МастерЛиний', 'ШтормВолн', 'КриоСтраж'];
+        const rivalName = `${leagueDef.icon} ${rivalNames[Math.floor(Math.random() * rivalNames.length)]}`;
+        const code = generateRoomCode(new Set(rooms.keys()));
+
+        const slot0: PlayerSlot = {
+          index: 0,
+          playerId: pid,
+          name: prof?.name ?? 'Игрок',
+          sessionToken: crypto.randomBytes(16).toString('hex'),
+          ws,
+          ready: true,
+          connected: true,
+          isBot: false,
+          rematchVote: false,
+          disconnectedAt: null,
+          inputTimestamps: [],
+        };
+        const slot1: PlayerSlot = {
+          index: 1,
+          name: rivalName,
+          sessionToken: 'bot',
+          ws: null,
+          ready: true,
+          connected: true,
+          isBot: true,
+          rematchVote: false,
+          disconnectedAt: null,
+          inputTimestamps: [],
+        };
+        const room: Room = {
+          code,
+          state: 'lobby',
+          players: [slot0, slot1],
+          match: null,
+          bot: null,
+          botDifficulty: diff,
+          isRanked: true,
+          bet,
+          betReserved: [false, false],
+          countdownRemainingSec: 0,
+          paused: false,
+          pauseRemainingSec: 0,
+          lastActivityAt: Date.now(),
+          tickCounter: 0,
+          dirtySnapshot: false,
+          config,
+        };
+        rooms.set(code, room);
+        socketToRoom.set(ws, { room, playerIndex: 0 });
+        startMatchInRoom(room);
+        broadcastArenaState();
         return;
       }
 
@@ -947,9 +1306,15 @@ export function createDualTetrisServer(
     });
 
     ws.on('close', () => {
+      removeChallengesBySocket(ws);
       removeFromMatchmaking(ws);
+      const pid = socketToPlayerId.get(ws);
+      if (pid && playerIdToSocket.get(pid) === ws) {
+        playerIdToSocket.delete(pid);
+      }
       socketToPlayerId.delete(ws);
       detachSocket(ws, false);
+      broadcastArenaState();
     });
   });
 

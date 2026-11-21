@@ -654,16 +654,16 @@
       </div>
     </div>
 
-    <!-- Экран Рейтингового поиска и Coin Duel (Фаза 4) -->
+    <!-- Экран Рейтинговой Арены: Доска вызовов и Игроки Онлайн (Фаза 4+) -->
     <div id="screen-matchmaking" class="overlay hidden">
       <div class="card">
         <div style="display:flex; align-items:center; justify-content:space-between">
-          <h2 class="logo-title" style="font-size:20px">🏆 РЕЙТИНГ И COIN DUEL</h2>
+          <h2 class="logo-title" style="font-size:20px">🏆 АРЕНА И ДУЭЛИ</h2>
           <button id="btn-close-matchmaking" class="icon-btn">✕</button>
         </div>
         <div id="mm-league-banner" class="reward-banner"></div>
         <div class="field-group">
-          <div class="field-label">Выбери ставку монетами (победитель забирает 2× банк):</div>
+          <div class="field-label">Ставка вызова (Coin Duel — победитель забирает 2× банк):</div>
           <div id="mm-bet-buttons" class="loadout-slots" style="grid-template-columns:repeat(5,1fr)">
             <div data-mm-bet="0" class="slot-chip active-slot">Обычный<br><span style="color:#94a3b8">0 🪙</span></div>
             <div data-mm-bet="50" class="slot-chip">Ставка<br><span style="color:#fde047">50 🪙</span></div>
@@ -672,9 +672,38 @@
             <div data-mm-bet="500" class="slot-chip">Ставка<br><span style="color:#fde047">500 🪙</span></div>
           </div>
         </div>
-        <div id="mm-status-box" style="text-align:center; font-size:13.5px; color:#38bdf8; min-height:22px"></div>
-        <button id="btn-start-mm" class="btn btn-primary">🔍 Найти соперника</button>
-        <button id="btn-cancel-mm" class="btn btn-danger hidden">Отменить поиск</button>
+
+        <div id="mm-status-box" style="text-align:center; font-size:13px; color:#38bdf8; min-height:18px"></div>
+
+        <div class="row">
+          <button id="btn-post-challenge" class="btn btn-primary" style="flex:1; padding:11px; font-size:13.5px">
+            📢 Вывесить вызов
+          </button>
+          <button id="btn-cancel-challenge" class="btn btn-danger hidden" style="flex:1; padding:11px; font-size:13.5px">
+            Снять мой вызов
+          </button>
+          <button id="btn-start-ranked-bot" class="btn btn-secondary" style="padding:11px; font-size:13px" title="Рейтинговый бой с ботом твоей лиги">
+            🤖 С ботом
+          </button>
+        </div>
+
+        <div class="field-label">📢 Открытые вызовы (нажми «Принять», чтобы начать бой):</div>
+        <div id="arena-challenges-list" class="ability-list" style="max-height:125px"></div>
+
+        <div class="field-label">🟢 Игроки онлайн (можно кинуть прямой вызов на дуэль):</div>
+        <div id="arena-online-list" class="ability-list" style="max-height:125px"></div>
+      </div>
+    </div>
+
+    <!-- Всплывающее приглашение на прямую дуэль -->
+    <div id="screen-incoming-duel" class="overlay hidden" style="z-index:40">
+      <div class="card" style="text-align:center; border-color:#facc15">
+        <h2 class="logo-title" style="font-size:24px">⚔️ ВЫЗОВ НА ДУЭЛЬ!</h2>
+        <div id="incoming-duel-text" style="font-size:15px; color:#e2e8f0"></div>
+        <div class="row">
+          <button id="btn-accept-duel" class="btn btn-primary" style="flex:1">⚔️ Принять бой!</button>
+          <button id="btn-decline-duel" class="btn btn-danger" style="flex:1">Отклонить</button>
+        </div>
       </div>
     </div>
 

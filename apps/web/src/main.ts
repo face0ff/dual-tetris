@@ -16,6 +16,8 @@ import {
   type GameEvent,
   type InputAction,
   type LeaderboardEntry,
+  type OnlinePlayerInfo,
+  type OpenChallengeInfo,
   type PieceShape,
   type PlayerProfileData,
   type RoomPlayerInfo,
@@ -168,8 +170,16 @@ const screenMatchmaking = document.getElementById('screen-matchmaking')!;
 const btnCloseMatchmaking = document.getElementById('btn-close-matchmaking') as HTMLButtonElement;
 const mmLeagueBannerEl = document.getElementById('mm-league-banner')!;
 const mmStatusBoxEl = document.getElementById('mm-status-box')!;
-const btnStartMm = document.getElementById('btn-start-mm') as HTMLButtonElement;
-const btnCancelMm = document.getElementById('btn-cancel-mm') as HTMLButtonElement;
+const btnPostChallenge = document.getElementById('btn-post-challenge') as HTMLButtonElement;
+const btnCancelChallenge = document.getElementById('btn-cancel-challenge') as HTMLButtonElement;
+const btnStartRankedBot = document.getElementById('btn-start-ranked-bot') as HTMLButtonElement;
+const arenaChallengesListEl = document.getElementById('arena-challenges-list')!;
+const arenaOnlineListEl = document.getElementById('arena-online-list')!;
+
+const screenIncomingDuel = document.getElementById('screen-incoming-duel')!;
+const incomingDuelTextEl = document.getElementById('incoming-duel-text')!;
+const btnAcceptDuel = document.getElementById('btn-accept-duel') as HTMLButtonElement;
+const btnDeclineDuel = document.getElementById('btn-decline-duel') as HTMLButtonElement;
 
 const btnOpenStats = document.getElementById('btn-open-stats') as HTMLButtonElement;
 const screenStats = document.getElementById('screen-stats')!;
@@ -192,6 +202,7 @@ let roomCode = '';
 let roomBet = 0;
 let selectedMmBet = 0;
 let mmSearching = false;
+let pendingIncomingChallengeId: string | null = null;
 let roomState: RoomState | 'home' = 'home';
 let roomPlayers: RoomPlayerInfo[] = [];
 let lanIp: string | null = null;
@@ -630,43 +641,144 @@ btnCloseStats.addEventListener('click', () => {
   screenStats.classList.add('hidden');
 });
 
+function renderArenaUI(
+  challenges: OpenChallengeInfo[],
+  onlinePlayers: OnlinePlayerInfo[]
+): void {
+  const myCh = challenges.find((c) => c.hostPlayerId === myPlayerId);
+  btnPostChallenge.classList.toggle('hidden', Boolean(myCh));
+  btnCancelChallenge.classList.toggle('hidden', !myCh);
+  if (myCh) {
+    mmStatusBoxEl.textContent = `📢 Твой вызов (ставка ${myCh.bet} 🪙) висит на доске — ждём соперника!`;
+  }
+
+  arenaChallengesListEl.innerHTML = '';
+  if (challenges.length === 0) {
+    arenaChallengesListEl.innerHTML = `<div style="color:#64748b;font-size:12px">Пока нет открытых вызовов. Нажми «📢 Вывесить вызов»!</div>`;
+  } else {
+    for (const c of challenges) {
+      const lg = getLeagueByRating(c.hostRating, config);
+      const isMine = c.hostPlayerId === myPlayerId;
+      const row = document.createElement('div');
+      row.className = 'ability-item';
+      row.style.borderLeft = `4px solid ${c.bet > 0 ? '#facc15' : '#38bdf8'}`;
+      row.innerHTML = `
+        <div style="flex:1">
+          <div style="font-weight:800;font-size:12.5px">
+            ${c.hostAvatar} ${c.hostName} <span style="color:#fde047">${lg.icon} ${c.hostRating}</span>
+          </div>
+          <div style="font-size:11px;color:#94a3b8">
+            ${c.bet > 0 ? `💰 Ставка Coin Duel: <b style="color:#fde047">${c.bet} 🪙</b> (банк ${c.bet * 2} 🪙)` : '⚔️ Рейтинговый бой без ставки'}
+          </div>
+        </div>
+      `;
+      if (!isMine) {
+        const acceptBtn = document.createElement('button');
+        acceptBtn.className = 'btn btn-primary';
+        acceptBtn.style.padding = '7px 11px';
+        acceptBtn.style.fontSize = '12px';
+        acceptBtn.textContent = '⚔️ Принять!';
+        acceptBtn.addEventListener('click', () => {
+          sendMsg({ type: 'accept_challenge', challengeId: c.id });
+        });
+        row.append(acceptBtn);
+      } else {
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-ready';
+        badge.textContent = 'Твой вызов';
+        row.append(badge);
+      }
+      arenaChallengesListEl.append(row);
+    }
+  }
+
+  arenaOnlineListEl.innerHTML = '';
+  const others = onlinePlayers.filter((p) => p.playerId !== myPlayerId);
+  if (others.length === 0) {
+    arenaOnlineListEl.innerHTML = `<div style="color:#64748b;font-size:12px">Сейчас кроме тебя никого нет в меню.</div>`;
+  } else {
+    for (const p of others) {
+      const lg = getLeagueByRating(p.rating, config);
+      const row = document.createElement('div');
+      row.className = 'ability-item';
+      row.innerHTML = `
+        <div style="flex:1">
+          <div style="font-weight:800;font-size:12.5px">
+            🟢 ${p.avatar} ${p.name} <span style="color:#fde047">${lg.icon} ${p.rating}</span>
+          </div>
+          <div style="font-size:11px;color:#94a3b8">${p.inMatch ? 'В бою...' : 'Свободен для дуэли'}</div>
+        </div>
+      `;
+      const duelBtn = document.createElement('button');
+      duelBtn.className = 'btn btn-blue';
+      duelBtn.style.padding = '7px 10px';
+      duelBtn.style.fontSize = '12px';
+      duelBtn.disabled = p.inMatch;
+      duelBtn.textContent =
+        selectedMmBet > 0 ? `⚔️ Вызвать (${selectedMmBet} 🪙)` : '⚔️ Вызвать';
+      duelBtn.addEventListener('click', () => {
+        sendMsg({
+          type: 'send_direct_duel',
+          targetPlayerId: p.playerId,
+          bet: selectedMmBet,
+        });
+        mmStatusBoxEl.textContent = `📨 Вызов отправлен игроку ${p.name}! Ожидаем ответа...`;
+      });
+      row.append(duelBtn);
+      arenaOnlineListEl.append(row);
+    }
+  }
+}
+
 btnOpenMatchmaking.addEventListener('click', () => {
   renderProfileUI();
   mmStatusBoxEl.textContent = '';
+  sendMsg({ type: 'get_arena_state' });
   screenMatchmaking.classList.remove('hidden');
 });
 btnCloseMatchmaking.addEventListener('click', () => {
-  if (mmSearching) {
-    sendMsg({ type: 'cancel_matchmaking' });
-    mmSearching = false;
-  }
+  sendMsg({ type: 'cancel_challenge' });
   screenMatchmaking.classList.add('hidden');
 });
 
 document.querySelectorAll<HTMLElement>('[data-mm-bet]').forEach((el) => {
   el.addEventListener('click', () => {
-    if (mmSearching) return;
     selectedMmBet = Number(el.dataset.mmBet ?? 0);
     document.querySelectorAll<HTMLElement>('[data-mm-bet]').forEach((c) => {
       c.classList.toggle('active-slot', Number(c.dataset.mmBet ?? 0) === selectedMmBet);
     });
+    sendMsg({ type: 'get_arena_state' });
   });
 });
 
-btnStartMm.addEventListener('click', () => {
-  const name = savePlayerName();
-  connectWebSocket(() => {
-    sendMsg({
-      type: 'find_match',
-      bet: selectedMmBet,
-      name,
-      playerId: myPlayerId,
-    });
-  });
+btnPostChallenge.addEventListener('click', () => {
+  savePlayerName();
+  sendMsg({ type: 'create_challenge', bet: selectedMmBet });
 });
 
-btnCancelMm.addEventListener('click', () => {
-  sendMsg({ type: 'cancel_matchmaking' });
+btnCancelChallenge.addEventListener('click', () => {
+  mmStatusBoxEl.textContent = '';
+  sendMsg({ type: 'cancel_challenge' });
+});
+
+btnStartRankedBot.addEventListener('click', () => {
+  savePlayerName();
+  sendMsg({ type: 'start_ranked_bot', bet: selectedMmBet });
+});
+
+btnAcceptDuel.addEventListener('click', () => {
+  if (!pendingIncomingChallengeId) return;
+  sendMsg({ type: 'accept_challenge', challengeId: pendingIncomingChallengeId });
+  pendingIncomingChallengeId = null;
+  screenIncomingDuel.classList.add('hidden');
+});
+
+btnDeclineDuel.addEventListener('click', () => {
+  if (pendingIncomingChallengeId) {
+    sendMsg({ type: 'decline_direct_duel', challengeId: pendingIncomingChallengeId });
+  }
+  pendingIncomingChallengeId = null;
+  screenIncomingDuel.classList.add('hidden');
 });
 
 document.querySelectorAll<HTMLButtonElement>('.btn-room-bet').forEach((btn) => {
@@ -1087,20 +1199,49 @@ function connectWebSocket(onOpen?: () => void): void {
       return;
     }
 
+    if (msg.type === 'arena_state') {
+      renderArenaUI(msg.challenges, msg.onlinePlayers);
+      return;
+    }
+
+    if (msg.type === 'incoming_duel') {
+      const c = msg.challenge;
+      pendingIncomingChallengeId = c.id;
+      const lg = getLeagueByRating(c.hostRating, config);
+      incomingDuelTextEl.innerHTML = `
+        <div style="font-size:18px;font-weight:800;margin-bottom:4px">
+          ${c.hostAvatar} ${c.hostName} (${lg.icon} ${c.hostRating} 🏆)
+        </div>
+        <div>вызывает тебя на рейтинговую дуэль!</div>
+        <div style="margin-top:6px;font-weight:800;color:#fde047">
+          ${c.bet > 0 ? `💰 Ставка Coin Duel: ${c.bet} 🪙 (банк ${c.bet * 2} 🪙)` : '⚔️ Обычный рейтинговый бой (без ставки)'}
+        </div>
+      `;
+      screenIncomingDuel.classList.remove('hidden');
+      sfx.lineClear(2);
+      return;
+    }
+
+    if (msg.type === 'duel_declined') {
+      mmStatusBoxEl.textContent = `❌ Игрок ${msg.byName} отклонил вызов.`;
+      showError(`Игрок ${msg.byName} отклонил вызов на дуэль.`);
+      return;
+    }
+
     if (msg.type === 'matchmaking_status') {
       mmSearching = msg.searching;
-      btnStartMm.classList.toggle('hidden', mmSearching);
-      btnCancelMm.classList.toggle('hidden', !mmSearching);
-      mmStatusBoxEl.textContent = mmSearching
-        ? `⏳ Поиск соперника (ставка: ${msg.bet} 🪙)...`
-        : '';
       return;
     }
 
     if (msg.type === 'error') {
-      if (msg.code === 'NOT_ENOUGH_COINS_FOR_BET') {
-        mmStatusBoxEl.textContent = msg.message || 'Недостаточно монет для такой ставки!';
-        showError(msg.message || 'Недостаточно монет для такой ставки!');
+      if (
+        msg.code === 'NOT_ENOUGH_COINS_FOR_BET' ||
+        msg.code === 'TARGET_OFFLINE' ||
+        msg.code === 'TARGET_BUSY' ||
+        msg.code === 'CHALLENGE_EXPIRED'
+      ) {
+        mmStatusBoxEl.textContent = msg.message || 'Ошибка вызова';
+        showError(msg.message || 'Ошибка вызова');
         return;
       }
       if (msg.code === 'NO_BOSS_ATTEMPTS') {
@@ -1171,9 +1312,8 @@ function connectWebSocket(onOpen?: () => void): void {
       screenChests.classList.add('hidden');
       screenMatchmaking.classList.add('hidden');
       screenStats.classList.add('hidden');
+      screenIncomingDuel.classList.add('hidden');
       mmSearching = false;
-      btnStartMm.classList.remove('hidden');
-      btnCancelMm.classList.add('hidden');
       latestSnapshot = null;
       predictedCur = null;
       pendingInputs = [];
@@ -1524,13 +1664,32 @@ function renderLeaderboard(entries: LeaderboardEntry[]): void {
     row.innerHTML = `
       <div style="font-weight:800;font-size:12.5px;display:flex;align-items:center;gap:6px">
         <span>${medal}</span>
+        <span>${e.online ? '🟢' : '⚪'}</span>
         <span>${e.avatar}</span>
         <span>${e.name}${isMe ? ' (Ты)' : ''}</span>
       </div>
-      <div style="font-size:12px;font-weight:800;color:#fde047">
-        ${lg.icon} ${e.rating} 🏆
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:12px;font-weight:800;color:#fde047">${lg.icon} ${e.rating} 🏆</span>
       </div>
     `;
+    if (!isMe && e.online) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-blue';
+      btn.style.padding = '4px 8px';
+      btn.style.fontSize = '11px';
+      btn.textContent = '⚔️ Дуэль';
+      btn.addEventListener('click', () => {
+        sendMsg({
+          type: 'send_direct_duel',
+          targetPlayerId: e.playerId,
+          bet: selectedMmBet,
+        });
+        screenStats.classList.add('hidden');
+        screenMatchmaking.classList.remove('hidden');
+        mmStatusBoxEl.textContent = `📨 Вызов отправлен игроку ${e.name}! Ожидаем ответа...`;
+      });
+      row.querySelector('div:last-child')?.append(btn);
+    }
     statsLeaderboardListEl.append(row);
   }
 }

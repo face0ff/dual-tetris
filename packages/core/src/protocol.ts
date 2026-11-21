@@ -99,6 +99,33 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('cancel_matchmaking'),
   }),
   z.object({
+    type: z.literal('get_arena_state'),
+  }),
+  z.object({
+    type: z.literal('create_challenge'),
+    bet: z.number().int().min(0).max(10000),
+  }),
+  z.object({
+    type: z.literal('cancel_challenge'),
+  }),
+  z.object({
+    type: z.literal('accept_challenge'),
+    challengeId: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal('send_direct_duel'),
+    targetPlayerId: z.string().min(1).max(64),
+    bet: z.number().int().min(0).max(10000),
+  }),
+  z.object({
+    type: z.literal('decline_direct_duel'),
+    challengeId: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal('start_ranked_bot'),
+    bet: z.number().int().min(0).max(10000).optional(),
+  }),
+  z.object({
     type: z.literal('buy_or_equip_skin'),
     skinId: BlockSkinIdSchema,
     requestId: z.string().min(1).max(64),
@@ -225,6 +252,28 @@ export interface LeaderboardEntry {
   league: LeagueTier;
   wins: number;
   matches: number;
+  online?: boolean;
+}
+
+export interface OpenChallengeInfo {
+  id: string;
+  hostPlayerId: string;
+  hostName: string;
+  hostAvatar: string;
+  hostRating: number;
+  hostLeague: LeagueTier;
+  bet: number;
+  targetPlayerId?: string;
+  createdAt: number;
+}
+
+export interface OnlinePlayerInfo {
+  playerId: string;
+  name: string;
+  avatar: string;
+  rating: number;
+  league: LeagueTier;
+  inMatch: boolean;
 }
 
 export interface ChestRewardResult {
@@ -356,6 +405,19 @@ export type ServerMessage =
   | {
       type: 'leaderboard';
       entries: LeaderboardEntry[];
+    }
+  | {
+      type: 'arena_state';
+      challenges: OpenChallengeInfo[];
+      onlinePlayers: OnlinePlayerInfo[];
+    }
+  | {
+      type: 'incoming_duel';
+      challenge: OpenChallengeInfo;
+    }
+  | {
+      type: 'duel_declined';
+      byName: string;
     }
   | {
       type: 'pong';

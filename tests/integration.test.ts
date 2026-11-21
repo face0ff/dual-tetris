@@ -538,6 +538,20 @@ describe('Интеграционные и нагрузочные тесты се
     expect(lbMsg.entries.length).toBeGreaterThanOrEqual(2);
     expect(lbMsg.entries[0].playerId).toBe('duel_p1');
     expect(lbMsg.entries[0].rating).toBe(516);
+    expect(lbMsg.entries[0].online).toBe(true);
+
+    // 5. Проверка Доски открытых вызовов и Прямого вызова на дуэль (Direct Duel) из Таблицы лидеров
+    c1.messages.length = 0;
+    c2.messages.length = 0;
+    c1.send({ type: 'send_direct_duel', targetPlayerId: 'duel_p2', bet: 50 });
+    const incoming = await c2.waitFor('incoming_duel');
+    expect(incoming.challenge.hostPlayerId).toBe('duel_p1');
+    expect(incoming.challenge.bet).toBe(50);
+
+    // Игрок 2 принимает прямой вызов -> мгновенно стартует рейтинговый матч со ставкой 50!
+    c2.send({ type: 'accept_challenge', challengeId: incoming.challenge.id });
+    await c1.waitFor('match_start');
+    await c2.waitFor('match_start');
 
     c1.close();
     c2.close();
