@@ -45,6 +45,10 @@ export interface GameConfig {
   redMeteorsPerPower: number;
   /** Жёлтый цвет: количество дополнительных джокеров в очереди после замены next (3.3) */
   yellowExtraJokers: number;
+  /** Максимальный запас энергии каждого из 4 цветов (Фаза 1А) */
+  energyMax: number;
+  /** Автоматическое срабатывание цветовых эффектов при сжигании линии */
+  autoColorEffects: boolean;
   /** Частота тика сервера в Гц (4) */
   serverTickHz: number;
   /** Частота отправки снапшотов в Гц (4) */
@@ -104,6 +108,8 @@ export const DEFAULT_CONFIG: GameConfig = {
   redMeteorsBase: 3,
   redMeteorsPerPower: 2,
   yellowExtraJokers: 3,
+  energyMax: 100,
+  autoColorEffects: true,
   serverTickHz: 30,
   snapshotHz: 15,
   maxInputsPerSec: 30,

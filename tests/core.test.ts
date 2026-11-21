@@ -280,4 +280,51 @@ describe('Ядро DUAL TETRIS (@dual-tetris/core)', () => {
     expect(simA.players[1].hp).toEqual(simB.players[1].hp);
     expect(simA.waves).toEqual(simB.waves);
   });
+
+  it('Фаза 1А: система энергии (старт с 0, учёт всех цветов, несколько линий, игнор джокеров, потолок energyMax)', () => {
+    const state = createMatch(777);
+    const p0 = state.players[0];
+    const W = state.config.boardWidth;
+    const H = state.config.boardHeight;
+
+    // 1. Старт с нуля
+    expect(p0.energy).toEqual({ green: 0, blue: 0, red: 0, yellow: 0 });
+
+    // 2. Заполним нижнюю строку H-1 разными цветами и джокерами:
+    // 4 зелёных (1), 3 синих (2), 5 красных (3), 2 жёлтых (4), 2 джокера (5) -> всего 16 клеток
+    const rowColors = [1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 5, 5];
+    for (let c = 0; c < W - 1; c++) {
+      p0.board[H - 1][c] = rowColors[c];
+    }
+    // Последнюю клетку (c = 15, джокер 5) закроем падающей фигурой 1x1 джокером
+    p0.cur = { m: [[1]], c: 5, x: W - 1, y: 0 };
+    applyPlayerInput(state, 0, 'HD');
+
+    expect(p0.energy).toEqual({
+      green: 4,
+      blue: 3,
+      red: 5,
+      yellow: 2,
+    });
+
+    const gainEv = state.events.find((e) => e.type === 'energy_gain');
+    expect(gainEv).toBeDefined();
+    if (gainEv && gainEv.type === 'energy_gain') {
+      expect(gainEv.gained).toEqual({ green: 4, blue: 3, red: 5, yellow: 2 });
+      expect(gainEv.total).toEqual({ green: 4, blue: 3, red: 5, yellow: 2 });
+    }
+
+    // 3. Сжигание сразу 2 линий и проверка ограничения energyMax (100)
+    p0.energy.green = 95;
+    for (let r = H - 2; r < H; r++) {
+      for (let c = 0; c < W - 1; c++) {
+        p0.board[r][c] = 1; // 15 зелёных клеток в каждой из двух строк
+      }
+    }
+    p0.cur = { m: [[1], [1]], c: 2, x: W - 1, y: 0 }; // 2 синие клетки закрывают обе строки
+    applyPlayerInput(state, 0, 'HD');
+
+    expect(p0.energy.green).toBe(state.config.energyMax); // 95 + 30 -> ограничено 100
+    expect(p0.energy.blue).toBe(3 + 2); // 3 + 2 = 5
+  });
 });

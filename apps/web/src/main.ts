@@ -81,17 +81,17 @@ function updateCanvasLayout(): void {
   BW = W * CX;
   BX = Math.floor((CW - BW) / 2);
 
-  // По высоте два поля занимают весь экран от верхнего бара HP до нижнего бара HP
-  const topHud = 36;
-  const bottomHud = 38;
-  const minGap = 48;
-  const availForBoards = Math.max(360, CH - topHud - bottomHud - minGap);
+  // По высоте два поля занимают весь экран от верхнего бара HP до нижней панели энергии/способностей
+  const topHud = 42;
+  const bottomHud = 74;
+  const minGap = 46;
+  const availForBoards = Math.max(340, CH - topHud - bottomHud - minGap);
 
   CY = Math.max(12, Math.floor(availForBoards / (2 * H)));
   BH = H * CY;
   ET = topHud;
   FRONT = ET + BH;
-  const actualGap = Math.max(44, CH - topHud - bottomHud - 2 * BH);
+  const actualGap = Math.max(42, CH - topHud - bottomHud - 2 * BH);
   MT = FRONT + actualGap;
 }
 
@@ -148,6 +148,7 @@ let pauseRemainingSec = 0;
 
 // Визуальные эффекты
 let flashTimer: [number, number] = [0, 0];
+let energyPulse: [number, number, number, number] = [0, 0, 0, 0];
 let rowFlashes: [RowFlash[], RowFlash[]] = [[], []];
 let meteorFlashes: [MeteorFlash[], MeteorFlash[]] = [[], []];
 let sparks: SparkFx[] = [];
@@ -350,6 +351,15 @@ function processGameEvents(events: GameEvent[]): void {
         flashTimer[ev.player] = 0.5;
         addMsg(S.msgOverflow(getPlayerLabel(ev.player), ev.damage));
         sfx.impact();
+        break;
+      }
+      case 'energy_gain': {
+        if (ev.player === youIndex) {
+          if (ev.gained.green > 0) energyPulse[0] = 0.45;
+          if (ev.gained.blue > 0) energyPulse[1] = 0.45;
+          if (ev.gained.red > 0) energyPulse[2] = 0.45;
+          if (ev.gained.yellow > 0) energyPulse[3] = 0.45;
+        }
         break;
       }
     }
@@ -972,13 +982,13 @@ function drawPlayerBoard(playerIndex: 0 | 1, isOpponent: boolean, barColor: stri
   g2.strokeRect(BX - 1, oy - 1, BW + 2, BH + 2);
 
   // Компактная полоса HP и подпись игрока прямо у краёв экрана
-  const by = isOpponent ? ET - 18 : MT + BH + 4;
-  const ly = isOpponent ? ET - 22 : MT + BH + 32;
+  const by = isOpponent ? ET - 16 : MT + BH + 4;
+  const ly = isOpponent ? ET - 21 : MT + BH + 28;
   const title = getPlayerLabel(playerIndex).toUpperCase();
 
   g2.textAlign = 'left';
   g2.fillStyle = '#e5e7eb';
-  g2.font = 'bold 12px system-ui';
+  g2.font = 'bold 11.5px system-ui';
   g2.fillText(
     title +
       (hp < config.rageHpThreshold ? `  ${S.rage}` : '') +
@@ -987,13 +997,75 @@ function drawPlayerBoard(playerIndex: 0 | 1, isOpponent: boolean, barColor: stri
     ly
   );
 
+  // Мини-индикаторы энергии соперника справа над его полосой HP
+  const energy = latestSnapshot.energy?.[playerIndex] ?? { green: 0, blue: 0, red: 0, yellow: 0 };
+  if (isOpponent) {
+    const eVals = [energy.green, energy.blue, energy.red, energy.yellow];
+    const pillW = 36;
+    const gap = 4;
+    const startX = BX + BW - (pillW * 4 + gap * 3);
+    for (let i = 0; i < 4; i++) {
+      const px = startX + i * (pillW + gap);
+      const py = ET - 31;
+      g2.fillStyle = '#1f2937';
+      g2.fillRect(px, py, pillW, 11);
+      g2.fillStyle = COL[i + 1];
+      g2.globalAlpha = 0.35;
+      g2.fillRect(px, py, (pillW * Math.min(config.energyMax, eVals[i])) / config.energyMax, 11);
+      g2.globalAlpha = 1;
+      g2.fillStyle = COL[i + 1];
+      g2.font = 'bold 9.5px system-ui';
+      g2.textAlign = 'center';
+      g2.fillText(`${eVals[i]}`, px + pillW / 2, py + 9);
+    }
+    g2.textAlign = 'left';
+  }
+
   g2.fillStyle = '#1f2937';
-  g2.fillRect(BX, by, BW, 13);
+  g2.fillRect(BX, by, BW, 12);
   g2.fillStyle = hp < config.rageHpThreshold ? '#ef4444' : barColor;
-  g2.fillRect(BX, by, (BW * Math.max(0, hp)) / config.maxHp, 13);
+  g2.fillRect(BX, by, (BW * Math.max(0, hp)) / config.maxHp, 12);
   g2.fillStyle = '#fff';
-  g2.font = 'bold 10.5px system-ui';
-  g2.fillText(`${Math.max(0, Math.round(hp))} / ${config.maxHp}`, BX + 5, by + 10.5);
+  g2.font = 'bold 10px system-ui';
+  g2.fillText(`${Math.max(0, Math.round(hp))} / ${config.maxHp}`, BX + 5, by + 9.5);
+
+  // Четыре резервуара энергии игрока внизу экрана (Фаза 1А)
+  if (!isOpponent) {
+    const eVals = [energy.green, energy.blue, energy.red, energy.yellow];
+    const eLabels = ['ЗЕЛ', 'СИН', 'КРА', 'ЖЁЛ'];
+    const gap = 6;
+    const slotW = (BW - gap * 3) / 4;
+    const slotY = MT + BH + 34;
+    const slotH = 34;
+
+    for (let i = 0; i < 4; i++) {
+      const sx = BX + i * (slotW + gap);
+      const pulse = energyPulse[i] > 0;
+      g2.fillStyle = pulse ? '#1e293b' : '#111827';
+      g2.fillRect(sx, slotY, slotW, slotH);
+
+      const ratio = Math.min(1, eVals[i] / Math.max(1, config.energyMax));
+      g2.fillStyle = COL[i + 1];
+      g2.globalAlpha = pulse ? 0.45 : 0.25;
+      g2.fillRect(sx, slotY, slotW * ratio, slotH);
+      g2.globalAlpha = 1;
+
+      g2.lineWidth = pulse ? 2 : 1;
+      g2.strokeStyle = pulse ? COL[i + 1] : '#334155';
+      g2.strokeRect(sx, slotY, slotW, slotH);
+
+      g2.fillStyle = COL[i + 1];
+      g2.font = 'bold 10px system-ui';
+      g2.textAlign = 'left';
+      g2.fillText(eLabels[i], sx + 6, slotY + 13);
+
+      g2.fillStyle = '#f8fafc';
+      g2.font = 'bold 12px system-ui';
+      g2.textAlign = 'right';
+      g2.fillText(`${eVals[i]}/${config.energyMax}`, sx + slotW - 6, slotY + 27);
+    }
+    g2.textAlign = 'left';
+  }
 
   // Окно следующей фигуры в зазоре
   const boxH = Math.min(44, Math.max(34, MT - FRONT - 8));
@@ -1015,6 +1087,9 @@ function renderLoop(now: number): void {
       meteorFlashes[idx].forEach((f) => (f.t -= dt));
       meteorFlashes[idx] = meteorFlashes[idx].filter((f) => f.t > 0);
       latestSnapshot.freeze[idx] = Math.max(0, latestSnapshot.freeze[idx] - dt);
+    }
+    for (let i = 0; i < 4; i++) {
+      energyPulse[i] = Math.max(0, energyPulse[i] - dt);
     }
 
     const waveStep = config.waveSpeedCellsPerSec * dt;

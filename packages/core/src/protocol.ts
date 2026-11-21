@@ -68,6 +68,13 @@ export interface ActivePiece extends PieceShape {
   y: number;
 }
 
+export interface EnergyState {
+  green: number;
+  blue: number;
+  red: number;
+  yellow: number;
+}
+
 export interface WaveState {
   id: number;
   /** Индекс стрелка (0 или 1) */
@@ -91,7 +98,13 @@ export type GameEvent =
   | { type: 'freeze'; target: 0 | 1; duration: number }
   | { type: 'meteor'; target: 0 | 1; cells: Array<[number, number]> }
   | { type: 'jokers'; player: 0 | 1; count: number }
-  | { type: 'overflow'; player: 0 | 1; damage: number };
+  | { type: 'overflow'; player: 0 | 1; damage: number }
+  | {
+      type: 'energy_gain';
+      player: 0 | 1;
+      gained: EnergyState;
+      total: EnergyState;
+    };
 
 export interface SnapshotMessage {
   type: 'snapshot';
@@ -102,6 +115,7 @@ export interface SnapshotMessage {
   combo: [number, number];
   freeze: [number, number];
   jokers: [number, number];
+  energy: [EnergyState, EnergyState];
   next: [PieceShape, PieceShape];
   cur: [ActivePiece, ActivePiece];
   waves: WaveState[];

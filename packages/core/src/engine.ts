@@ -1,6 +1,7 @@
 import { DEFAULT_CONFIG, type GameConfig } from './config.js';
 import type {
   ActivePiece,
+  EnergyState,
   GameEvent,
   InputAction,
   PieceShape,
@@ -94,6 +95,7 @@ export interface PlayerState {
   gravityTimer: number;
   freezeRemaining: number;
   jokersRemaining: number;
+  energy: EnergyState;
   rng: SeededRng;
   ackSeq: number;
 }
@@ -182,6 +184,12 @@ export function createMatch(seed: number, config: GameConfig = DEFAULT_CONFIG): 
       gravityTimer: 0,
       freezeRemaining: 0,
       jokersRemaining: 0,
+      energy: {
+        green: 0,
+        blue: 0,
+        red: 0,
+        yellow: 0,
+      },
       rng,
       ackSeq: 0,
     };
@@ -209,6 +217,25 @@ export function getGravityIntervalSec(state: MatchState, playerIndex: 0 | 1): nu
   const base = Math.max(config.gravityMinBaseSec, config.gravityBaseSec - config.gravityDecayPerSec * t);
   const rageMult = p.hp < config.rageHpThreshold ? config.rageGravityMultiplier : 1;
   return base * config.gravityFactor * rageMult;
+}
+
+/** Начисление энергии за все цветные кубики (1..4) в уничтоженных линиях (Фаза 1А) */
+export function addEnergy(
+  player: PlayerState,
+  colorCounts: number[],
+  energyMax: number
+): EnergyState {
+  const gained: EnergyState = {
+    green: colorCounts[1] ?? 0,
+    blue: colorCounts[2] ?? 0,
+    red: colorCounts[3] ?? 0,
+    yellow: colorCounts[4] ?? 0,
+  };
+  player.energy.green = Math.min(energyMax, player.energy.green + gained.green);
+  player.energy.blue = Math.min(energyMax, player.energy.blue + gained.blue);
+  player.energy.red = Math.min(energyMax, player.energy.red + gained.red);
+  player.energy.yellow = Math.min(energyMax, player.energy.yellow + gained.yellow);
+  return gained;
 }
 
 /** Определяет доминирующий цвет в сгоревших линиях по правилу 3.3 */
@@ -272,6 +299,14 @@ export function lockPiece(state: MatchState, playerIndex: 0 | 1): void {
 
   if (burnedCount > 0) {
     p.combo++;
+    const gained = addEnergy(p, colorCounts, config.energyMax);
+    state.events.push({
+      type: 'energy_gain',
+      player: playerIndex,
+      gained,
+      total: { ...p.energy },
+    });
+
     const domColor = pickDominantColor(colorCounts, p.rng);
 
     state.events.push({
@@ -282,23 +317,25 @@ export function lockPiece(state: MatchState, playerIndex: 0 | 1): void {
       row: lowestBurnedRow,
     });
 
-    if (domColor === 1) {
-      const healAmount = config.greenHealPerLine * burnedCount;
-      p.hp = Math.min(config.maxHp, p.hp + healAmount);
-      state.events.push({
-        type: 'heal',
-        player: playerIndex,
-        amount: healAmount,
-        hp: p.hp,
-      });
-    } else if (domColor === 4) {
-      p.next = { m: [[1]], c: 5 };
-      p.jokersRemaining = config.yellowExtraJokers;
-      state.events.push({
-        type: 'jokers',
-        player: playerIndex,
-        count: 1 + config.yellowExtraJokers,
-      });
+    if (config.autoColorEffects) {
+      if (domColor === 1) {
+        const healAmount = config.greenHealPerLine * burnedCount;
+        p.hp = Math.min(config.maxHp, p.hp + healAmount);
+        state.events.push({
+          type: 'heal',
+          player: playerIndex,
+          amount: healAmount,
+          hp: p.hp,
+        });
+      } else if (domColor === 4) {
+        p.next = { m: [[1]], c: 5 };
+        p.jokersRemaining = config.yellowExtraJokers;
+        state.events.push({
+          type: 'jokers',
+          player: playerIndex,
+          count: 1 + config.yellowExtraJokers,
+        });
+      }
     }
 
     const rage = p.hp < config.rageHpThreshold ? config.rageDamageMultiplier : 1;
@@ -376,40 +413,42 @@ export function applyWaveImpact(state: MatchState, wave: WaveState): void {
     color: wave.col,
   });
 
-  // 3. Применяет эффект цвета (3.3)
-  if (wave.col === 2) {
-    const duration = config.blueFreezeBaseSec + config.blueFreezePerPowerSec * wave.pow;
-    target.freezeRemaining = duration;
-    state.events.push({
-      type: 'freeze',
-      target: targetIndex,
-      duration,
-    });
-  } else if (wave.col === 3) {
-    const occupiedCells: Array<[number, number]> = [];
-    for (let r = 0; r < config.boardHeight; r++) {
-      for (let c = 0; c < config.boardWidth; c++) {
-        if (target.board[r][c] !== 0) {
-          occupiedCells.push([r, c]);
+  // 3. Применяет эффект цвета (3.3), если включены автоматические эффекты
+  if (config.autoColorEffects) {
+    if (wave.col === 2) {
+      const duration = config.blueFreezeBaseSec + config.blueFreezePerPowerSec * wave.pow;
+      target.freezeRemaining = duration;
+      state.events.push({
+        type: 'freeze',
+        target: targetIndex,
+        duration,
+      });
+    } else if (wave.col === 3) {
+      const occupiedCells: Array<[number, number]> = [];
+      for (let r = 0; r < config.boardHeight; r++) {
+        for (let c = 0; c < config.boardWidth; c++) {
+          if (target.board[r][c] !== 0) {
+            occupiedCells.push([r, c]);
+          }
         }
       }
+      const meteorCount = Math.min(
+        occupiedCells.length,
+        config.redMeteorsBase + config.redMeteorsPerPower * wave.pow
+      );
+      const destroyed: Array<[number, number]> = [];
+      for (let k = 0; k < meteorCount; k++) {
+        const pickIdx = attacker.rng.nextInt(0, occupiedCells.length - 1);
+        const [ry, rx] = occupiedCells.splice(pickIdx, 1)[0];
+        target.board[ry][rx] = 0;
+        destroyed.push([ry, rx]);
+      }
+      state.events.push({
+        type: 'meteor',
+        target: targetIndex,
+        cells: destroyed,
+      });
     }
-    const meteorCount = Math.min(
-      occupiedCells.length,
-      config.redMeteorsBase + config.redMeteorsPerPower * wave.pow
-    );
-    const destroyed: Array<[number, number]> = [];
-    for (let k = 0; k < meteorCount; k++) {
-      const pickIdx = attacker.rng.nextInt(0, occupiedCells.length - 1);
-      const [ry, rx] = occupiedCells.splice(pickIdx, 1)[0];
-      target.board[ry][rx] = 0;
-      destroyed.push([ry, rx]);
-    }
-    state.events.push({
-      type: 'meteor',
-      target: targetIndex,
-      cells: destroyed,
-    });
   }
 }
 
@@ -647,6 +686,7 @@ export function createSnapshot(state: MatchState, clearEvents = true): SnapshotM
     combo: [state.players[0].combo, state.players[1].combo],
     freeze: [state.players[0].freezeRemaining, state.players[1].freezeRemaining],
     jokers: [state.players[0].jokersRemaining, state.players[1].jokersRemaining],
+    energy: [{ ...state.players[0].energy }, { ...state.players[1].energy }],
     next: [clonePiece(state.players[0].next), clonePiece(state.players[1].next)],
     cur: [cloneActive(state.players[0].cur), cloneActive(state.players[1].cur)],
     waves: state.waves.map((w) => ({ ...w })),
