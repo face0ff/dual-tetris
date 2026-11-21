@@ -461,4 +461,70 @@ describe('Интеграционные и нагрузочные тесты се
 
     c1.close();
   });
+
+  it('Фаза 4 по WebSocket: автоподбор соперника (Matchmaking), Coin Duel со ставкой монетами (2x банк победителю), рейтинг Elo и история матчей', async () => {
+    server = createDualTetrisServer({
+      maxHp: 15,
+      overflowDamage: 15,
+    });
+    const port = await server.listen(0, '127.0.0.1');
+
+    const c1 = await TestWsClient.connect(port);
+    const c2 = await TestWsClient.connect(port);
+
+    c1.send({ type: 'auth_profile', playerId: 'duel_p1', name: 'Гладиатор 1' });
+    c2.send({ type: 'auth_profile', playerId: 'duel_p2', name: 'Гладиатор 2' });
+    const p1Init = await c1.waitFor('profile');
+    const p2Init = await c2.waitFor('profile');
+    expect(p1Init.profile.rating).toBe(500);
+    expect(p1Init.profile.league).toBe('bronze');
+    expect(p1Init.profile.coins).toBe(300);
+    expect(p2Init.profile.coins).toBe(300);
+
+    // 1. Попытка поставить больше монет, чем есть на балансе (500 > 300), отклоняется
+    c1.send({ type: 'find_match', bet: 500, name: 'Гладиатор 1', playerId: 'duel_p1' });
+    const betErr = await c1.waitFor('error', (e) => e.code === 'NOT_ENOUGH_COINS_FOR_BET');
+    expect(betErr.code).toBe('NOT_ENOUGH_COINS_FOR_BET');
+
+    // 2. Оба игрока встают в поиск Coin Duel со ставкой 100 монет -> мгновенный матч!
+    c1.messages.length = 0;
+    c2.messages.length = 0;
+    c1.send({ type: 'find_match', bet: 100, name: 'Гладиатор 1', playerId: 'duel_p1' });
+    const mmStatus = await c1.waitFor('matchmaking_status');
+    expect(mmStatus.searching).toBe(true);
+    expect(mmStatus.bet).toBe(100);
+
+    c2.send({ type: 'find_match', bet: 100, name: 'Гладиатор 2', playerId: 'duel_p2' });
+    await c1.waitFor('match_start');
+    await c2.waitFor('match_start');
+
+    // Ставка 100 монет списана в резерв у обоих (осталось по 200)
+    expect(server.store.getOrCreateProfile('duel_p1').coins).toBe(200);
+    expect(server.store.getOrCreateProfile('duel_p2').coins).toBe(200);
+
+    // 3. Игрок 2 проигрывает -> Игрок 1 забирает весь банк 200 монет (итого 400) и +16 рейтинга (516)!
+    for (let seq = 1; seq <= 20; seq++) {
+      c2.send({ type: 'input', seq, a: 'HD' });
+    }
+
+    const end1 = await c1.waitFor('match_end', undefined, 5000);
+    expect(end1.winner).toBe(0);
+    expect(end1.betPot).toBe(200);
+    expect(end1.coinsEarned).toEqual([200, 0]);
+    expect(end1.ratingDelta).toEqual([16, -16]);
+    expect(end1.newRating).toEqual([516, 484]);
+
+    const p1After = server.store.getOrCreateProfile('duel_p1');
+    const p2After = server.store.getOrCreateProfile('duel_p2');
+    expect(p1After.coins).toBe(400);
+    expect(p2After.coins).toBe(200);
+    expect(p1After.stats.currentStreak).toBe(1);
+    expect(p1After.stats.bestStreak).toBe(1);
+    expect(p1After.matchHistory).toHaveLength(1);
+    expect(p1After.matchHistory[0].bet).toBe(100);
+    expect(p1After.matchHistory[0].coinsDelta).toBe(100); // чистая прибыль +100
+
+    c1.close();
+    c2.close();
+  });
 });

@@ -6,7 +6,9 @@ import {
   activateAbility,
   applyPlayerInput,
   applyWaveImpact,
+  calculateEloDelta,
   createMatch,
+  getLeagueByRating,
   lockPiece,
   pickDominantColor,
   stepMatch,
@@ -466,5 +468,20 @@ describe('Ядро DUAL TETRIS (@dual-tetris/core)', () => {
         (ev) => ev.type === 'ability_activated' && ev.player === 1 && ev.abilityId === 'armageddon'
       )
     ).toBe(true);
+  });
+
+  it('Фаза 4: 5 рейтинговых лиг (старт 500 Bronze -> Diamond 2500+) и расчёт рейтинга Elo', () => {
+    expect(DEFAULT_CONFIG.economy.startingRating).toBe(500);
+    expect(getLeagueByRating(500).id).toBe('bronze');
+    expect(getLeagueByRating(1000).id).toBe('silver');
+    expect(getLeagueByRating(1500).id).toBe('gold');
+    expect(getLeagueByRating(2000).id).toBe('platinum');
+    expect(getLeagueByRating(2600).id).toBe('diamond');
+
+    // Победа над равным соперником даёт +16 при K=32
+    expect(calculateEloDelta(500, 500, 1, 32)).toBe(16);
+    expect(calculateEloDelta(500, 500, 0, 32)).toBe(-16);
+    // Победа над более сильным соперником даёт больше очков
+    expect(calculateEloDelta(500, 900, 1, 32)).toBeGreaterThan(25);
   });
 });

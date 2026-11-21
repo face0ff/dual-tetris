@@ -13,6 +13,7 @@ import {
   applyPlayerInput,
   createMatch,
   createSnapshot,
+  getLeagueByRating,
   stepMatch,
   type AbilitySlots,
   type BotDifficulty,
@@ -58,6 +59,9 @@ interface Room {
   match: MatchState | null;
   bot: BotController | null;
   botDifficulty?: BotDifficulty;
+  isRanked?: boolean;
+  bet: number;
+  betReserved: [boolean, boolean];
   countdownRemainingSec: number;
   paused: boolean;
   pauseRemainingSec: number;
@@ -65,6 +69,15 @@ interface Room {
   tickCounter: number;
   dirtySnapshot: boolean;
   config: GameConfig;
+}
+
+interface MatchmakingEntry {
+  ws: WebSocket;
+  playerId?: string;
+  name: string;
+  rating: number;
+  bet: number;
+  joinedAt: number;
 }
 
 export interface DualTetrisServer {
@@ -108,6 +121,14 @@ export function createDualTetrisServer(
   const rooms = new Map<string, Room>();
   const socketToRoom = new Map<WebSocket, { room: Room; playerIndex: 0 | 1 }>();
   const socketToPlayerId = new Map<WebSocket, string>();
+  const matchmakingQueue: MatchmakingEntry[] = [];
+
+  const removeFromMatchmaking = (ws: WebSocket) => {
+    const idx = matchmakingQueue.findIndex((e) => e.ws === ws);
+    if (idx !== -1) {
+      matchmakingQueue.splice(idx, 1);
+    }
+  };
 
   const send = (ws: WebSocket | null, msg: ServerMessage) => {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -143,6 +164,7 @@ export function createDualTetrisServer(
           state: room.state,
           youIndex: p.index,
           sessionToken: p.sessionToken,
+          bet: room.bet,
           countdownSec: room.state === 'countdown' ? Math.ceil(room.countdownRemainingSec) : undefined,
           paused: room.paused,
           pauseRemainingSec: room.paused ? Math.ceil(room.pauseRemainingSec) : undefined,
@@ -152,6 +174,40 @@ export function createDualTetrisServer(
   };
 
   const startMatchInRoom = (room: Room) => {
+    // Если назначена ставка Coin Duel — резервируем монеты у игроков
+    room.betReserved = [false, false];
+    if (room.bet > 0) {
+      for (const idx of [0, 1] as const) {
+        const p = room.players[idx];
+        if (p && !p.isBot) {
+          if (!store.canAffordBet(p.playerId, room.bet)) {
+            room.state = 'lobby';
+            for (const pl of room.players) {
+              if (pl) {
+                pl.ready = false;
+                send(pl.ws, {
+                  type: 'error',
+                  code: 'NOT_ENOUGH_COINS_FOR_BET',
+                  message: `Недостаточно монет для ставки ${room.bet} 🪙`,
+                });
+              }
+            }
+            broadcastRoomState(room);
+            return;
+          }
+        }
+      }
+      for (const idx of [0, 1] as const) {
+        const p = room.players[idx];
+        if (p && !p.isBot && p.playerId) {
+          room.betReserved[idx] = store.reserveBet(p.playerId, room.bet, room.code);
+          send(p.ws, { type: 'profile', profile: store.getOrCreateProfile(p.playerId) });
+        } else if (p && p.isBot) {
+          room.betReserved[idx] = true;
+        }
+      }
+    }
+
     const seed = Math.floor(Math.random() * 0x7fffffff) || 1;
     const p0Slots = store.getMatchAbilitySlots(room.players[0]?.playerId);
     let p1Slots = store.getMatchAbilitySlots(room.players[1]?.playerId);
@@ -231,6 +287,25 @@ export function createDualTetrisServer(
         const otherIndex: 0 | 1 = playerIndex === 0 ? 1 : 0;
         const other = room.players[otherIndex];
         room.state = 'finished';
+        const isBotMatch = Boolean(room.players[1]?.isBot);
+        const res = store.recordMatchResult(
+          [room.players[0]?.playerId, room.players[1]?.playerId],
+          otherIndex,
+          isBotMatch,
+          room.botDifficulty ?? 'medium',
+          {
+            playerNames: [
+              room.players[0]?.name ?? 'Игрок 1',
+              room.players[1]?.name ?? 'Игрок 2',
+            ],
+            finalHps: room.match
+              ? [room.match.players[0].hp, room.match.players[1].hp]
+              : [0, room.config.maxHp],
+            bet: room.bet,
+            betReserved: room.betReserved,
+            isRanked: room.isRanked,
+          }
+        );
         if (other && other.ws) {
           send(other.ws, {
             type: 'match_end',
@@ -239,7 +314,15 @@ export function createDualTetrisServer(
             hp: room.match
               ? [room.match.players[0].hp, room.match.players[1].hp]
               : [room.config.maxHp, room.config.maxHp],
+            coinsEarned: res.coinsEarned,
+            xpEarned: res.xpEarned,
+            ratingDelta: res.ratingDelta,
+            newRating: res.newRating,
+            betPot: res.betPot,
           });
+          if (other.playerId) {
+            send(other.ws, { type: 'profile', profile: store.getOrCreateProfile(other.playerId) });
+          }
         }
       }
       room.players[playerIndex] = null;
@@ -433,7 +516,108 @@ export function createDualTetrisServer(
         return;
       }
 
+      if (msg.type === 'cancel_matchmaking') {
+        removeFromMatchmaking(ws);
+        send(ws, { type: 'matchmaking_status', searching: false, bet: 0 });
+        return;
+      }
+
+      if (msg.type === 'find_match') {
+        removeFromMatchmaking(ws);
+        detachSocket(ws, true);
+        const bet = msg.bet ?? 0;
+        if (!config.economy.coinDuelBets.includes(bet)) {
+          send(ws, { type: 'error', code: 'INVALID_BET', message: 'Недопустимая ставка' });
+          return;
+        }
+        const pid = msg.playerId || socketToPlayerId.get(ws);
+        let rating = config.economy.startingRating;
+        if (pid) {
+          const prof = store.getOrCreateProfile(pid, msg.name);
+          socketToPlayerId.set(ws, prof.playerId);
+          rating = prof.rating;
+          if (!store.canAffordBet(prof.playerId, bet)) {
+            send(ws, {
+              type: 'error',
+              code: 'NOT_ENOUGH_COINS_FOR_BET',
+              message: `Недостаточно монет для ставки ${bet} 🪙`,
+            });
+            return;
+          }
+        }
+
+        // Проверяем, ждёт ли уже в очереди живой соперник с такой же ставкой
+        const matchIdx = matchmakingQueue.findIndex((e) => e.bet === bet && e.ws !== ws);
+        if (matchIdx !== -1) {
+          const opp = matchmakingQueue.splice(matchIdx, 1)[0];
+          send(opp.ws, { type: 'matchmaking_status', searching: false, bet });
+          send(ws, { type: 'matchmaking_status', searching: false, bet });
+
+          const code = generateRoomCode(new Set(rooms.keys()));
+          const slot0: PlayerSlot = {
+            index: 0,
+            playerId: opp.playerId,
+            name: opp.name,
+            sessionToken: crypto.randomBytes(16).toString('hex'),
+            ws: opp.ws,
+            ready: true,
+            connected: true,
+            isBot: false,
+            rematchVote: false,
+            disconnectedAt: null,
+            inputTimestamps: [],
+          };
+          const slot1: PlayerSlot = {
+            index: 1,
+            playerId: pid,
+            name: (msg.name?.trim() || 'Игрок 2').slice(0, 24),
+            sessionToken: crypto.randomBytes(16).toString('hex'),
+            ws,
+            ready: true,
+            connected: true,
+            isBot: false,
+            rematchVote: false,
+            disconnectedAt: null,
+            inputTimestamps: [],
+          };
+          const room: Room = {
+            code,
+            state: 'lobby',
+            players: [slot0, slot1],
+            match: null,
+            bot: null,
+            isRanked: true,
+            bet,
+            betReserved: [false, false],
+            countdownRemainingSec: 0,
+            paused: false,
+            pauseRemainingSec: 0,
+            lastActivityAt: Date.now(),
+            tickCounter: 0,
+            dirtySnapshot: false,
+            config,
+          };
+          rooms.set(code, room);
+          socketToRoom.set(opp.ws, { room, playerIndex: 0 });
+          socketToRoom.set(ws, { room, playerIndex: 1 });
+          startMatchInRoom(room);
+          return;
+        }
+
+        matchmakingQueue.push({
+          ws,
+          playerId: pid,
+          name: (msg.name?.trim() || 'Игрок').slice(0, 24),
+          rating,
+          bet,
+          joinedAt: Date.now(),
+        });
+        send(ws, { type: 'matchmaking_status', searching: true, bet });
+        return;
+      }
+
       if (msg.type === 'create_room') {
+        removeFromMatchmaking(ws);
         detachSocket(ws, true);
         const code = generateRoomCode(new Set(rooms.keys()));
         const token = msg.sessionToken || crypto.randomBytes(16).toString('hex');
@@ -461,6 +645,9 @@ export function createDualTetrisServer(
           players: [slot0, null],
           match: null,
           bot: null,
+          isRanked: true,
+          bet: 0,
+          betReserved: [false, false],
           countdownRemainingSec: 0,
           paused: false,
           pauseRemainingSec: 0,
@@ -531,6 +718,9 @@ export function createDualTetrisServer(
           match: null,
           bot: null,
           botDifficulty: difficulty,
+          isRanked: false,
+          bet: 0,
+          betReserved: [false, false],
           countdownRemainingSec: 0,
           paused: false,
           pauseRemainingSec: 0,
@@ -646,8 +836,38 @@ export function createDualTetrisServer(
         return;
       }
 
+      if (msg.type === 'set_room_bet') {
+        if (room.state !== 'lobby') return;
+        if (!room.config.economy.coinDuelBets.includes(msg.bet)) {
+          send(ws, { type: 'error', code: 'INVALID_BET', message: 'Недопустимая ставка' });
+          return;
+        }
+        if (!store.canAffordBet(slot.playerId, msg.bet)) {
+          send(ws, {
+            type: 'error',
+            code: 'NOT_ENOUGH_COINS_FOR_BET',
+            message: `Недостаточно монет для ставки ${msg.bet} 🪙`,
+          });
+          return;
+        }
+        room.bet = msg.bet;
+        for (const p of room.players) {
+          if (p && !p.isBot) p.ready = false;
+        }
+        broadcastRoomState(room);
+        return;
+      }
+
       if (msg.type === 'ready') {
         if (room.state !== 'lobby' && room.state !== 'countdown') return;
+        if (msg.value && room.bet > 0 && !store.canAffordBet(slot.playerId, room.bet)) {
+          send(ws, {
+            type: 'error',
+            code: 'NOT_ENOUGH_COINS_FOR_BET',
+            message: `Недостаточно монет для ставки ${room.bet} 🪙`,
+          });
+          return;
+        }
         slot.ready = msg.value;
         if (!slot.ready && room.state === 'countdown') {
           room.state = 'lobby';
@@ -686,7 +906,7 @@ export function createDualTetrisServer(
           send(ws, { type: 'error', code: res.errorCode });
           return;
         }
-        store.recordAbilityUsed(slot.playerId);
+        store.recordAbilityUsed(slot.playerId, res.ability.id);
         room.dirtySnapshot = true;
         return;
       }
@@ -707,6 +927,7 @@ export function createDualTetrisServer(
     });
 
     ws.on('close', () => {
+      removeFromMatchmaking(ws);
       socketToPlayerId.delete(ws);
       detachSocket(ws, false);
     });
@@ -719,6 +940,72 @@ export function createDualTetrisServer(
 
   const intervalId = setInterval(() => {
     const now = Date.now();
+
+    // Проверка очереди автоподбора (если прошло matchmakingTimeoutMs — подбираем рейтингового соперника по лиге)
+    for (let i = matchmakingQueue.length - 1; i >= 0; i--) {
+      const entry = matchmakingQueue[i];
+      if (entry.ws.readyState !== WebSocket.OPEN) {
+        matchmakingQueue.splice(i, 1);
+        continue;
+      }
+      if (now - entry.joinedAt >= config.economy.matchmakingTimeoutMs) {
+        matchmakingQueue.splice(i, 1);
+        send(entry.ws, { type: 'matchmaking_status', searching: false, bet: entry.bet });
+
+        const leagueDef = getLeagueByRating(entry.rating, config);
+        const diff = leagueDef.botDifficulty;
+        const rivalNames = ['КиберТетрис', 'НеонБлок', 'МастерЛиний', 'ШтормВолн', 'КриоСтраж'];
+        const rivalName = `${leagueDef.icon} ${rivalNames[Math.floor(Math.random() * rivalNames.length)]}`;
+        const code = generateRoomCode(new Set(rooms.keys()));
+
+        const slot0: PlayerSlot = {
+          index: 0,
+          playerId: entry.playerId,
+          name: entry.name,
+          sessionToken: crypto.randomBytes(16).toString('hex'),
+          ws: entry.ws,
+          ready: true,
+          connected: true,
+          isBot: false,
+          rematchVote: false,
+          disconnectedAt: null,
+          inputTimestamps: [],
+        };
+        const slot1: PlayerSlot = {
+          index: 1,
+          name: rivalName,
+          sessionToken: 'bot',
+          ws: null,
+          ready: true,
+          connected: true,
+          isBot: true,
+          rematchVote: false,
+          disconnectedAt: null,
+          inputTimestamps: [],
+        };
+        const room: Room = {
+          code,
+          state: 'lobby',
+          players: [slot0, slot1],
+          match: null,
+          bot: null,
+          botDifficulty: diff,
+          isRanked: true,
+          bet: entry.bet,
+          betReserved: [false, false],
+          countdownRemainingSec: 0,
+          paused: false,
+          pauseRemainingSec: 0,
+          lastActivityAt: now,
+          tickCounter: 0,
+          dirtySnapshot: false,
+          config,
+        };
+        rooms.set(code, room);
+        socketToRoom.set(entry.ws, { room, playerIndex: 0 });
+        startMatchInRoom(room);
+      }
+    }
 
     for (const [code, room] of rooms.entries()) {
       // Удаление пустых комнат через 10 минут
@@ -792,11 +1079,28 @@ export function createDualTetrisServer(
         if (room.match.finished) {
           room.state = 'finished';
           const isBotMatch = Boolean(room.players[1]?.isBot);
-          const { coinsEarned, xpEarned, bonusChestReward } = store.recordMatchResult(
+          const {
+            coinsEarned,
+            xpEarned,
+            ratingDelta,
+            newRating,
+            betPot,
+            bonusChestReward,
+          } = store.recordMatchResult(
             [room.players[0]?.playerId, room.players[1]?.playerId],
             room.match.winner,
             isBotMatch,
-            room.botDifficulty ?? 'medium'
+            room.botDifficulty ?? 'medium',
+            {
+              playerNames: [
+                room.players[0]?.name ?? 'Игрок 1',
+                room.players[1]?.name ?? 'Игрок 2',
+              ],
+              finalHps: [room.match.players[0].hp, room.match.players[1].hp],
+              bet: room.bet,
+              betReserved: room.betReserved,
+              isRanked: room.isRanked,
+            }
           );
           const endMsg: ServerMessage = {
             type: 'match_end',
@@ -805,6 +1109,9 @@ export function createDualTetrisServer(
             hp: [room.match.players[0].hp, room.match.players[1].hp],
             coinsEarned,
             xpEarned,
+            ratingDelta,
+            newRating,
+            betPot,
             bonusChestReward,
           };
           for (const p of room.players) {

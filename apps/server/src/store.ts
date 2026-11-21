@@ -3,6 +3,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {
   DEFAULT_CONFIG,
+  calculateEloDelta,
+  getLeagueByRating,
   type AbilityRarity,
   type AbilitySlots,
   type BotDifficulty,
@@ -112,13 +114,41 @@ export class ProfileStore {
     };
   }
 
-  private ensureDailyState(profile: PlayerProfileData): boolean {
+  private ensureProfileFields(profile: PlayerProfileData): boolean {
+    let changed = false;
     const today = this.getTodayUtc();
     if (!profile.daily || profile.daily.dateUtc !== today) {
       profile.daily = this.createFreshDailyState(today);
-      return true;
+      changed = true;
     }
-    return false;
+    if (profile.xp === undefined) {
+      profile.xp = 0;
+      profile.level = 1;
+      changed = true;
+    }
+    if (profile.rating === undefined) {
+      profile.rating = this.config.economy.startingRating;
+      changed = true;
+    }
+    const expectedLeague = getLeagueByRating(profile.rating, this.config).id;
+    if (profile.league !== expectedLeague) {
+      profile.league = expectedLeague;
+      changed = true;
+    }
+    if (!profile.matchHistory) {
+      profile.matchHistory = [];
+      changed = true;
+    }
+    if (profile.stats.currentStreak === undefined) {
+      profile.stats.currentStreak = 0;
+      profile.stats.bestStreak = 0;
+      changed = true;
+    }
+    if (!profile.stats.abilityUsage) {
+      profile.stats.abilityUsage = {};
+      changed = true;
+    }
+    return changed;
   }
 
   private addXp(profile: PlayerProfileData, amount: number): void {
@@ -163,6 +193,7 @@ export class ProfileStore {
           };
         }
       }
+      const startRating = this.config.economy.startingRating;
       profile = {
         playerId: cleanId,
         name: (name?.trim() || 'Игрок').slice(0, 24),
@@ -170,6 +201,8 @@ export class ProfileStore {
         coins: this.config.economy.startingCoins,
         xp: 0,
         level: 1,
+        rating: startRating,
+        league: getLeagueByRating(startRating, this.config).id,
         ownedAbilities: initialOwned,
         loadout: [...this.config.defaultLoadout],
         stats: {
@@ -177,19 +210,18 @@ export class ProfileStore {
           losses: 0,
           draws: 0,
           matches: 0,
+          currentStreak: 0,
+          bestStreak: 0,
+          abilityUsage: {},
         },
         daily: this.createFreshDailyState(this.getTodayUtc()),
+        matchHistory: [],
       };
       this.data.profiles[cleanId] = profile;
       this.recordTransaction(cleanId, this.config.economy.startingCoins, 'initial_grant');
       this.save();
     } else {
-      let changed = this.ensureDailyState(profile);
-      if (profile.xp === undefined) {
-        profile.xp = 0;
-        profile.level = 1;
-        changed = true;
-      }
+      let changed = this.ensureProfileFields(profile);
       if (name && name.trim() && name.trim() !== profile.name) {
         profile.name = name.trim().slice(0, 24);
         changed = true;
@@ -212,7 +244,7 @@ export class ProfileStore {
     if (!profile) {
       return { ok: false, errorCode: 'PROFILE_NOT_FOUND' };
     }
-    this.ensureDailyState(profile);
+    this.ensureProfileFields(profile);
 
     for (const abId of loadout) {
       if (abId !== null) {
@@ -240,6 +272,33 @@ export class ProfileStore {
     }) as AbilitySlots;
   }
 
+  public canAffordBet(playerId: string | undefined, bet: number): boolean {
+    if (bet <= 0) return true;
+    if (!playerId) return false;
+    const profile = this.data.profiles[playerId];
+    return Boolean(profile && profile.coins >= bet);
+  }
+
+  public reserveBet(playerId: string | undefined, bet: number, roomCode: string): boolean {
+    if (bet <= 0) return true;
+    if (!playerId) return false;
+    const profile = this.data.profiles[playerId];
+    if (!profile || profile.coins < bet) return false;
+    profile.coins -= bet;
+    this.recordTransaction(playerId, -bet, 'coin_duel_stake', roomCode);
+    this.save();
+    return true;
+  }
+
+  public refundBet(playerId: string | undefined, bet: number, roomCode: string): void {
+    if (bet <= 0 || !playerId) return;
+    const profile = this.data.profiles[playerId];
+    if (!profile) return;
+    profile.coins += bet;
+    this.recordTransaction(playerId, bet, 'coin_duel_refund', roomCode);
+    this.save();
+  }
+
   public consumeBossAttempt(
     playerId: string
   ): { ok: true; profile: PlayerProfileData } | { ok: false; errorCode: string } {
@@ -247,7 +306,7 @@ export class ProfileStore {
     if (!profile) {
       return { ok: false, errorCode: 'PROFILE_NOT_FOUND' };
     }
-    this.ensureDailyState(profile);
+    this.ensureProfileFields(profile);
 
     if (profile.daily.bossAttemptsRemaining <= 0) {
       return { ok: false, errorCode: 'NO_BOSS_ATTEMPTS' };
@@ -266,7 +325,7 @@ export class ProfileStore {
     if (!profile) {
       return { ok: false, errorCode: 'PROFILE_NOT_FOUND' };
     }
-    this.ensureDailyState(profile);
+    this.ensureProfileFields(profile);
 
     const reqKey = `ad:${playerId}:${requestId}`;
     if (this.data.processedRequests[reqKey]) {
@@ -284,17 +343,21 @@ export class ProfileStore {
     return { ok: true, profile: this.cloneProfile(profile) };
   }
 
-  public recordAbilityUsed(playerId?: string): void {
+  public recordAbilityUsed(playerId?: string, abilityId?: string): void {
     if (!playerId) return;
     const profile = this.data.profiles[playerId];
     if (!profile) return;
-    this.ensureDailyState(profile);
+    this.ensureProfileFields(profile);
+
+    if (abilityId) {
+      profile.stats.abilityUsage[abilityId] = (profile.stats.abilityUsage[abilityId] ?? 0) + 1;
+    }
 
     const quest = profile.daily.quests.find((q) => q.id === 'use_5_abilities');
     if (quest && quest.progress < quest.target) {
       quest.progress = Math.min(quest.target, quest.progress + 1);
-      this.save();
     }
+    this.save();
   }
 
   public claimDailyQuest(
@@ -306,7 +369,7 @@ export class ProfileStore {
     if (!profile) {
       return { ok: false, errorCode: 'PROFILE_NOT_FOUND' };
     }
-    this.ensureDailyState(profile);
+    this.ensureProfileFields(profile);
 
     const reqKey = `quest:${playerId}:${requestId}`;
     if (this.data.processedRequests[reqKey]) {
@@ -346,7 +409,7 @@ export class ProfileStore {
     if (!profile) {
       return { ok: false, errorCode: 'PROFILE_NOT_FOUND' };
     }
-    this.ensureDailyState(profile);
+    this.ensureProfileFields(profile);
 
     const existingReward = this.data.chestRewards[requestId];
     if (existingReward) {
@@ -425,23 +488,64 @@ export class ProfileStore {
     playerIds: [string | undefined, string | undefined],
     winner: 0 | 1 | null,
     isBotMatch: boolean,
-    botDifficulty: BotDifficulty = 'medium'
+    botDifficulty: BotDifficulty = 'medium',
+    extra?: {
+      playerNames?: [string, string];
+      finalHps?: [number, number];
+      bet?: number;
+      betReserved?: [boolean, boolean];
+      isRanked?: boolean;
+      botRating?: number;
+    }
   ): {
     coinsEarned: [number, number];
     xpEarned: [number, number];
+    ratingDelta: [number, number];
+    newRating: [number, number];
+    betPot: number;
     bonusChestReward?: ChestRewardResult;
   } {
     const coinsEarned: [number, number] = [0, 0];
     const xpEarned: [number, number] = [0, 0];
+    const ratingDelta: [number, number] = [0, 0];
+    const newRating: [number, number] = [
+      this.config.economy.startingRating,
+      this.config.economy.startingRating,
+    ];
     let bonusChestReward: ChestRewardResult | undefined;
-    const { pvpWinCoins, botWinCoins, participationCoins, bossFirstWinChest } = this.config.economy;
+
+    const bet = extra?.bet ?? 0;
+    const betReserved = extra?.betReserved ?? [false, false];
+    const betPot = bet > 0 ? bet * 2 : 0;
+    const isRanked = Boolean(extra?.isRanked) || !isBotMatch;
+
+    const { pvpWinCoins, botWinCoins, participationCoins, bossFirstWinChest, eloKFactor } =
+      this.config.economy;
     const diffProfile = this.config.bot.difficulties?.[botDifficulty];
+
+    const p0Prof = playerIds[0] ? this.data.profiles[playerIds[0]] : undefined;
+    const p1Prof = playerIds[1] ? this.data.profiles[playerIds[1]] : undefined;
+    const r0 = p0Prof?.rating ?? this.config.economy.startingRating;
+    const r1 =
+      p1Prof?.rating ??
+      extra?.botRating ??
+      (isBotMatch
+        ? botDifficulty === 'boss'
+          ? 1800
+          : botDifficulty === 'hard'
+            ? 1400
+            : botDifficulty === 'medium'
+              ? 1000
+              : 600
+        : r0);
+
+    const ratingsBefore: [number, number] = [r0, r1];
 
     for (const idx of [0, 1] as const) {
       const pid = playerIds[idx];
       if (!pid || !this.data.profiles[pid]) continue;
       const profile = this.data.profiles[pid];
-      this.ensureDailyState(profile);
+      this.ensureProfileFields(profile);
       profile.stats.matches += 1;
 
       const qPlay = profile.daily.quests.find((q) => q.id === 'play_3_matches');
@@ -449,14 +553,55 @@ export class ProfileStore {
         qPlay.progress = Math.min(qPlay.target, qPlay.progress + 1);
       }
 
-      let rewardCoins = participationCoins;
+      const oppIdx: 0 | 1 = idx === 0 ? 1 : 0;
+      const score: 1 | 0.5 | 0 = winner === null ? 0.5 : winner === idx ? 1 : 0;
+
+      // Расчёт рейтинга Elo
+      let rDelta = 0;
+      if (isRanked) {
+        rDelta = calculateEloDelta(ratingsBefore[idx], ratingsBefore[oppIdx], score, eloKFactor);
+      } else if (winner === idx) {
+        // В одиночной тренировке с ботом даём небольшой бонус рейтинга за победу
+        rDelta =
+          botDifficulty === 'boss'
+            ? 18
+            : botDifficulty === 'hard'
+              ? 12
+              : botDifficulty === 'medium'
+                ? 8
+                : 5;
+      }
+
+      const updatedRating = Math.max(0, profile.rating + rDelta);
+      ratingDelta[idx] = updatedRating - profile.rating;
+      profile.rating = updatedRating;
+      profile.league = getLeagueByRating(profile.rating, this.config).id;
+      newRating[idx] = profile.rating;
+
+      let rewardCoins = 0;
       let rewardXp = 10;
 
       if (winner === null) {
         profile.stats.draws += 1;
+        profile.stats.currentStreak = 0;
+        if (bet > 0 && betReserved[idx]) {
+          // При ничьей в Coin Duel возвращаем ставку
+          rewardCoins = bet;
+        } else {
+          rewardCoins = participationCoins;
+        }
       } else if (winner === idx) {
         profile.stats.wins += 1;
-        if (isBotMatch) {
+        profile.stats.currentStreak += 1;
+        if (profile.stats.currentStreak > profile.stats.bestStreak) {
+          profile.stats.bestStreak = profile.stats.currentStreak;
+        }
+
+        if (bet > 0 && betReserved[idx]) {
+          // Победитель Coin Duel забирает весь банк (2 * bet)
+          rewardCoins = bet * 2;
+          rewardXp = 45;
+        } else if (isBotMatch && !extra?.isRanked) {
           rewardCoins = diffProfile ? diffProfile.winCoins : botWinCoins;
           rewardXp = diffProfile ? diffProfile.xpReward : 25;
         } else {
@@ -469,7 +614,6 @@ export class ProfileStore {
           qWin.progress = Math.min(qWin.target, qWin.progress + 1);
         }
 
-        // Бонусный сундук за первую победу над Боссом Дня сегодня (п. 3.3)
         if (
           isBotMatch &&
           botDifficulty === 'boss' &&
@@ -488,17 +632,54 @@ export class ProfileStore {
         }
       } else {
         profile.stats.losses += 1;
+        profile.stats.currentStreak = 0;
+        rewardCoins = bet > 0 ? 0 : participationCoins;
       }
 
-      profile.coins += rewardCoins;
+      if (rewardCoins > 0) {
+        profile.coins += rewardCoins;
+        this.recordTransaction(
+          pid,
+          rewardCoins,
+          bet > 0 ? `coin_duel_payout:${bet}` : winner === idx ? 'match_win' : 'match_participation'
+        );
+      }
+
       this.addXp(profile, rewardXp);
       coinsEarned[idx] = rewardCoins;
       xpEarned[idx] = rewardXp;
-      this.recordTransaction(pid, rewardCoins, winner === idx ? 'match_win' : 'match_participation');
+
+      const oppName =
+        extra?.playerNames?.[oppIdx] ?? (isBotMatch ? diffProfile?.name ?? 'Бот' : 'Соперник');
+      const myHp = Math.max(0, Math.round(extra?.finalHps?.[idx] ?? 0));
+      const oppHp = Math.max(0, Math.round(extra?.finalHps?.[oppIdx] ?? 0));
+      const netCoins = bet > 0 && betReserved[idx] ? rewardCoins - bet : rewardCoins;
+
+      profile.matchHistory.unshift({
+        id: `m_${Date.now()}_${idx}`,
+        timestamp: Date.now(),
+        opponentName: oppName,
+        result: winner === null ? 'draw' : winner === idx ? 'win' : 'loss',
+        myHp,
+        oppHp,
+        ratingDelta: ratingDelta[idx],
+        coinsDelta: netCoins,
+        bet,
+      });
+      if (profile.matchHistory.length > 15) {
+        profile.matchHistory.length = 15;
+      }
     }
 
     this.save();
-    return { coinsEarned, xpEarned, bonusChestReward };
+    return {
+      coinsEarned,
+      xpEarned,
+      ratingDelta,
+      newRating,
+      betPot,
+      bonusChestReward,
+    };
   }
 
   private rollRarity(weights: Record<AbilityRarity, number>): AbilityRarity {
@@ -544,11 +725,16 @@ export class ProfileStore {
       coins: p.coins,
       xp: p.xp ?? 0,
       level: p.level ?? 1,
+      rating: p.rating ?? this.config.economy.startingRating,
+      league: p.league ?? getLeagueByRating(p.rating ?? 500, this.config).id,
       ownedAbilities: Object.fromEntries(
         Object.entries(p.ownedAbilities).map(([k, v]) => [k, { ...v }])
       ),
       loadout: [...p.loadout],
-      stats: { ...p.stats },
+      stats: {
+        ...p.stats,
+        abilityUsage: { ...(p.stats.abilityUsage ?? {}) },
+      },
       daily: {
         dateUtc: p.daily.dateUtc,
         bossAttemptsRemaining: p.daily.bossAttemptsRemaining,
@@ -556,6 +742,7 @@ export class ProfileStore {
         bossFirstWinClaimedToday: p.daily.bossFirstWinClaimedToday,
         quests: p.daily.quests.map((q) => ({ ...q })),
       },
+      matchHistory: (p.matchHistory ?? []).map((m) => ({ ...m })),
     };
   }
 }

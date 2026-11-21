@@ -19,6 +19,16 @@ export type AbilityEffectType =
 
 export type ChestTier = 'wooden' | 'silver' | 'gold' | 'legendary';
 export type BotDifficulty = 'easy' | 'medium' | 'hard' | 'boss';
+export type LeagueTier = 'bronze' | 'silver' | 'gold' | 'platinum' | 'diamond';
+
+export interface LeagueDefinition {
+  id: LeagueTier;
+  name: string;
+  icon: string;
+  minRating: number;
+  maxRating: number | null;
+  botDifficulty: BotDifficulty;
+}
 
 export interface BotDifficultyProfile {
   id: BotDifficulty;
@@ -45,6 +55,10 @@ export interface ChestDefinition {
 
 export interface EconomyConfig {
   startingCoins: number;
+  startingRating: number;
+  eloKFactor: number;
+  coinDuelBets: readonly number[];
+  matchmakingTimeoutMs: number;
   pvpWinCoins: number;
   botWinCoins: number;
   participationCoins: number;
@@ -55,6 +69,7 @@ export interface EconomyConfig {
   dailyBossMaxAdAttempts: number;
   bossFirstWinChest: ChestTier;
   chests: Record<ChestTier, ChestDefinition>;
+  leagues: Record<LeagueTier, LeagueDefinition>;
 }
 
 export interface AbilityDefinition {
@@ -376,6 +391,10 @@ export const DEFAULT_CONFIG: GameConfig = {
   },
   economy: {
     startingCoins: 300,
+    startingRating: 500,
+    eloKFactor: 32,
+    coinDuelBets: [0, 50, 100, 250, 500],
+    matchmakingTimeoutMs: 7000,
     pvpWinCoins: 60,
     botWinCoins: 30,
     participationCoins: 15,
@@ -409,6 +428,48 @@ export const DEFAULT_CONFIG: GameConfig = {
         name: 'Легендарный сундук',
         price: 1000,
         weights: { common: 0, rare: 15, epic: 45, legendary: 40 },
+      },
+    },
+    leagues: {
+      bronze: {
+        id: 'bronze',
+        name: 'Бронза',
+        icon: '🥉',
+        minRating: 0,
+        maxRating: 999,
+        botDifficulty: 'easy',
+      },
+      silver: {
+        id: 'silver',
+        name: 'Серебро',
+        icon: '🥈',
+        minRating: 1000,
+        maxRating: 1499,
+        botDifficulty: 'medium',
+      },
+      gold: {
+        id: 'gold',
+        name: 'Золото',
+        icon: '🥇',
+        minRating: 1500,
+        maxRating: 1999,
+        botDifficulty: 'hard',
+      },
+      platinum: {
+        id: 'platinum',
+        name: 'Платина',
+        icon: '💠',
+        minRating: 2000,
+        maxRating: 2499,
+        botDifficulty: 'hard',
+      },
+      diamond: {
+        id: 'diamond',
+        name: 'Алмаз',
+        icon: '💎',
+        minRating: 2500,
+        maxRating: null,
+        botDifficulty: 'boss',
       },
     },
   },
@@ -501,3 +562,25 @@ export const DEFAULT_CONFIG: GameConfig = {
     swipeUpRotateCells: 2.0,
   },
 };
+
+export function getLeagueByRating(
+  rating: number,
+  config: GameConfig = DEFAULT_CONFIG
+): LeagueDefinition {
+  const leagues = config.economy.leagues;
+  if (rating >= leagues.diamond.minRating) return leagues.diamond;
+  if (rating >= leagues.platinum.minRating) return leagues.platinum;
+  if (rating >= leagues.gold.minRating) return leagues.gold;
+  if (rating >= leagues.silver.minRating) return leagues.silver;
+  return leagues.bronze;
+}
+
+export function calculateEloDelta(
+  ratingA: number,
+  ratingB: number,
+  scoreA: 1 | 0.5 | 0,
+  kFactor = DEFAULT_CONFIG.economy.eloKFactor
+): number {
+  const expectedA = 1 / (1 + Math.pow(10, (ratingB - ratingA) / 400));
+  return Math.round(kFactor * (scoreA - expectedA));
+}

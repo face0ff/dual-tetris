@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AbilityRarity, BotDifficulty, ChestTier, GameConfig } from './config.js';
+import type { AbilityRarity, BotDifficulty, ChestTier, GameConfig, LeagueTier } from './config.js';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -78,6 +78,19 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
     requestId: z.string().min(1).max(64),
   }),
   z.object({
+    type: z.literal('set_room_bet'),
+    bet: z.number().int().min(0).max(10000),
+  }),
+  z.object({
+    type: z.literal('find_match'),
+    bet: z.number().int().min(0).max(10000).optional(),
+    name: z.string().max(24).optional(),
+    playerId: z.string().max(64).optional(),
+  }),
+  z.object({
+    type: z.literal('cancel_matchmaking'),
+  }),
+  z.object({
     type: z.literal('activate_ability'),
     slotIndex: z.number().int().min(0).max(3),
     requestId: z.string().min(1).max(64),
@@ -134,6 +147,21 @@ export interface PlayerStats {
   losses: number;
   draws: number;
   matches: number;
+  currentStreak: number;
+  bestStreak: number;
+  abilityUsage: Record<string, number>;
+}
+
+export interface MatchHistoryEntry {
+  id: string;
+  timestamp: number;
+  opponentName: string;
+  result: 'win' | 'loss' | 'draw';
+  myHp: number;
+  oppHp: number;
+  ratingDelta: number;
+  coinsDelta: number;
+  bet: number;
 }
 
 export interface DailyQuestProgress {
@@ -161,10 +189,13 @@ export interface PlayerProfileData {
   coins: number;
   xp: number;
   level: number;
+  rating: number;
+  league: LeagueTier;
   ownedAbilities: Record<string, OwnedAbility>;
   loadout: [string | null, string | null, string | null, string | null];
   stats: PlayerStats;
   daily: PlayerDailyState;
+  matchHistory: MatchHistoryEntry[];
 }
 
 export interface ChestRewardResult {
@@ -255,9 +286,15 @@ export type ServerMessage =
       state: RoomState;
       youIndex: 0 | 1;
       sessionToken: string;
+      bet?: number;
       countdownSec?: number;
       paused?: boolean;
       pauseRemainingSec?: number;
+    }
+  | {
+      type: 'matchmaking_status';
+      searching: boolean;
+      bet: number;
     }
   | {
       type: 'match_start';
@@ -273,6 +310,9 @@ export type ServerMessage =
       hp: [number, number];
       coinsEarned?: [number, number];
       xpEarned?: [number, number];
+      ratingDelta?: [number, number];
+      newRating?: [number, number];
+      betPot?: number;
       bonusChestReward?: ChestRewardResult;
     }
   | {

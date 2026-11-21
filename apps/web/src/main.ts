@@ -3,6 +3,7 @@ import {
   PROTOCOL_VERSION,
   fits,
   getGhostY,
+  getLeagueByRating,
   getLowestEmptyRow,
   rotateMatrixCW,
   type ActivePiece,
@@ -159,6 +160,22 @@ const btnCloseQuests = document.getElementById('btn-close-quests') as HTMLButton
 const questsDateLabelEl = document.getElementById('quests-date-label')!;
 const questsListEl = document.getElementById('quests-list')!;
 
+const btnOpenMatchmaking = document.getElementById('btn-open-matchmaking') as HTMLButtonElement;
+const screenMatchmaking = document.getElementById('screen-matchmaking')!;
+const btnCloseMatchmaking = document.getElementById('btn-close-matchmaking') as HTMLButtonElement;
+const mmLeagueBannerEl = document.getElementById('mm-league-banner')!;
+const mmStatusBoxEl = document.getElementById('mm-status-box')!;
+const btnStartMm = document.getElementById('btn-start-mm') as HTMLButtonElement;
+const btnCancelMm = document.getElementById('btn-cancel-mm') as HTMLButtonElement;
+
+const btnOpenStats = document.getElementById('btn-open-stats') as HTMLButtonElement;
+const screenStats = document.getElementById('screen-stats')!;
+const btnCloseStats = document.getElementById('btn-close-stats') as HTMLButtonElement;
+const statsSummaryBoxEl = document.getElementById('stats-summary-box')!;
+const statsLeaguesListEl = document.getElementById('stats-leagues-list')!;
+const statsAbilitiesBoxEl = document.getElementById('stats-abilities-box')!;
+const statsHistoryListEl = document.getElementById('stats-history-list')!;
+
 const pingBadge = document.getElementById('ping-badge')!;
 const btnSound = document.getElementById('btn-sound') as HTMLButtonElement;
 const btnLeaveMatch = document.getElementById('btn-leave-match') as HTMLButtonElement;
@@ -168,6 +185,9 @@ let ws: WebSocket | null = null;
 let config: GameConfig = DEFAULT_CONFIG;
 let youIndex: 0 | 1 = 0;
 let roomCode = '';
+let roomBet = 0;
+let selectedMmBet = 0;
+let mmSearching = false;
 let roomState: RoomState | 'home' = 'home';
 let roomPlayers: RoomPlayerInfo[] = [];
 let lanIp: string | null = null;
@@ -292,12 +312,87 @@ function renderProfileUI(): void {
   if (!myProfile) return;
   const totalAbilities = Object.keys(config.abilities).length;
   const ownedCount = Object.keys(myProfile.ownedAbilities).length;
+  const leagueDef = getLeagueByRating(myProfile.rating ?? 500, config);
   btnAvatar.textContent = myProfile.avatar || myAvatar;
   profileCoinsEl.textContent = `🪙 ${myProfile.coins}`;
   chestsCoinsEl.textContent = `🪙 ${myProfile.coins}`;
-  profileStatsText.textContent = `Ур.${myProfile.level ?? 1} (${myProfile.xp ?? 0} XP) • 🏆 ${myProfile.stats.wins}/${myProfile.stats.matches}`;
+  profileStatsText.textContent = `${leagueDef.icon} ${myProfile.rating ?? 500} 🏆 • Ур.${myProfile.level ?? 1} • ${myProfile.stats.wins}/${myProfile.stats.matches} побед`;
   btnOpenInventory.textContent = `🎒 Колода (${ownedCount}/${totalAbilities})`;
   inventoryCountEl.textContent = `${ownedCount}/${totalAbilities}`;
+
+  // Баннер лиги в окне рейтингового поиска (Фаза 4)
+  mmLeagueBannerEl.innerHTML = `
+    <div style="font-size:15px;font-weight:900">${leagueDef.icon} Лига: ${leagueDef.name} (${myProfile.rating ?? 500} 🏆)</div>
+    <div style="font-size:11.5px;color:#cbd5e1;margin-top:2px">Твой баланс: <b style="color:#fde047">${myProfile.coins} 🪙</b></div>
+  `;
+
+  // Заполнение окна Статистики и Лиг (Фаза 4)
+  const winrate =
+    myProfile.stats.matches > 0
+      ? Math.round((myProfile.stats.wins / myProfile.stats.matches) * 100)
+      : 0;
+  statsSummaryBoxEl.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      <div>🏆 Рейтинг: <b>${leagueDef.icon} ${myProfile.rating ?? 500}</b> (${leagueDef.name})</div>
+      <div>📈 Winrate: <b>${winrate}%</b> (${myProfile.stats.wins}В / ${myProfile.stats.losses}П)</div>
+      <div>🔥 Серия побед: <b>${myProfile.stats.currentStreak ?? 0}</b></div>
+      <div>👑 Рекорд серии: <b>${myProfile.stats.bestStreak ?? 0}</b></div>
+    </div>
+  `;
+
+  statsLeaguesListEl.innerHTML = '';
+  for (const lg of Object.values(config.economy.leagues)) {
+    const isCur = lg.id === leagueDef.id;
+    const chip = document.createElement('div');
+    chip.className = `slot-chip${isCur ? ' active-slot' : ''}`;
+    chip.innerHTML = `<div>${lg.icon} ${lg.name}</div><div style="font-size:9.5px;color:#94a3b8">${lg.minRating}+</div>`;
+    statsLeaguesListEl.append(chip);
+  }
+
+  const usageEntries = Object.entries(myProfile.stats.abilityUsage ?? {}).sort(
+    (a, b) => b[1] - a[1]
+  );
+  if (usageEntries.length === 0) {
+    statsAbilitiesBoxEl.textContent = 'Пока не использовано ни одной способности в матчах.';
+  } else {
+    statsAbilitiesBoxEl.innerHTML = usageEntries
+      .slice(0, 4)
+      .map(([abId, cnt]) => {
+        const d = config.abilities[abId];
+        return `<span class="badge badge-wait" style="margin-right:4px">${d ? d.name : abId}: ${cnt}×</span>`;
+      })
+      .join(' ');
+  }
+
+  statsHistoryListEl.innerHTML = '';
+  const hist = myProfile.matchHistory ?? [];
+  if (hist.length === 0) {
+    statsHistoryListEl.innerHTML = `<div style="color:#64748b;font-size:12px">История матчей пока пуста.</div>`;
+  } else {
+    for (const h of hist) {
+      const row = document.createElement('div');
+      row.className = 'ability-item';
+      const isWin = h.result === 'win';
+      const isDraw = h.result === 'draw';
+      row.style.borderLeft = `4px solid ${isWin ? '#22c55e' : isDraw ? '#facc15' : '#f43f5e'}`;
+      const rSign = h.ratingDelta >= 0 ? `+${h.ratingDelta}` : `${h.ratingDelta}`;
+      const cSign = h.coinsDelta >= 0 ? `+${h.coinsDelta}` : `${h.coinsDelta}`;
+      row.innerHTML = `
+        <div style="flex:1">
+          <div style="font-weight:700;font-size:12.5px">
+            ${isWin ? '🏆 Победа' : isDraw ? '🤝 Ничья' : '💀 Поражение'} vs ${h.opponentName}
+            ${h.bet > 0 ? `<span class="badge badge-ready" style="margin-left:4px">Ставка ${h.bet} 🪙</span>` : ''}
+          </div>
+          <div style="font-size:11px;color:#94a3b8">Счёт HP: ${h.myHp} : ${h.oppHp}</div>
+        </div>
+        <div style="text-align:right;font-size:11.5px;font-weight:700">
+          <div style="color:${h.ratingDelta >= 0 ? '#4ade80' : '#fda4af'}">${rSign} 🏆</div>
+          <div style="color:#fde047">${cSign} 🪙</div>
+        </div>
+      `;
+      statsHistoryListEl.append(row);
+    }
+  }
 
   // Обновление попыток на Босса и статуса рекламы (Фаза 3)
   if (myProfile.daily) {
@@ -482,6 +577,60 @@ btnCloseQuests.addEventListener('click', () => {
   screenQuests.classList.add('hidden');
 });
 
+btnOpenStats.addEventListener('click', () => {
+  renderProfileUI();
+  screenStats.classList.remove('hidden');
+});
+btnCloseStats.addEventListener('click', () => {
+  screenStats.classList.add('hidden');
+});
+
+btnOpenMatchmaking.addEventListener('click', () => {
+  renderProfileUI();
+  mmStatusBoxEl.textContent = '';
+  screenMatchmaking.classList.remove('hidden');
+});
+btnCloseMatchmaking.addEventListener('click', () => {
+  if (mmSearching) {
+    sendMsg({ type: 'cancel_matchmaking' });
+    mmSearching = false;
+  }
+  screenMatchmaking.classList.add('hidden');
+});
+
+document.querySelectorAll<HTMLElement>('[data-mm-bet]').forEach((el) => {
+  el.addEventListener('click', () => {
+    if (mmSearching) return;
+    selectedMmBet = Number(el.dataset.mmBet ?? 0);
+    document.querySelectorAll<HTMLElement>('[data-mm-bet]').forEach((c) => {
+      c.classList.toggle('active-slot', Number(c.dataset.mmBet ?? 0) === selectedMmBet);
+    });
+  });
+});
+
+btnStartMm.addEventListener('click', () => {
+  const name = savePlayerName();
+  connectWebSocket(() => {
+    sendMsg({
+      type: 'find_match',
+      bet: selectedMmBet,
+      name,
+      playerId: myPlayerId,
+    });
+  });
+});
+
+btnCancelMm.addEventListener('click', () => {
+  sendMsg({ type: 'cancel_matchmaking' });
+});
+
+document.querySelectorAll<HTMLButtonElement>('.btn-room-bet').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const bet = Number(btn.dataset.bet ?? 0);
+    sendMsg({ type: 'set_room_bet', bet });
+  });
+});
+
 document.querySelectorAll<HTMLButtonElement>('.btn-start-bot').forEach((btn) => {
   btn.addEventListener('click', () => {
     const difficulty = (btn.dataset.diff as BotDifficulty) || 'medium';
@@ -549,6 +698,11 @@ function renderLobbyUI(countdownSec?: number): void {
   lobbyCodeEl.textContent = roomCode;
   const shareUrl = getShareableRoomUrl(roomCode);
   lobbyLinkEl.textContent = shareUrl;
+
+  document.querySelectorAll<HTMLButtonElement>('.btn-room-bet').forEach((btn) => {
+    const b = Number(btn.dataset.bet ?? 0);
+    btn.className = b === roomBet ? 'btn btn-blue btn-room-bet' : 'btn btn-secondary btn-room-bet';
+  });
 
   lobbyPlayersEl.innerHTML = '';
   for (let idx = 0; idx < 2; idx++) {
@@ -883,7 +1037,22 @@ function connectWebSocket(onOpen?: () => void): void {
       return;
     }
 
+    if (msg.type === 'matchmaking_status') {
+      mmSearching = msg.searching;
+      btnStartMm.classList.toggle('hidden', mmSearching);
+      btnCancelMm.classList.toggle('hidden', !mmSearching);
+      mmStatusBoxEl.textContent = mmSearching
+        ? `⏳ Поиск соперника (ставка: ${msg.bet} 🪙)...`
+        : '';
+      return;
+    }
+
     if (msg.type === 'error') {
+      if (msg.code === 'NOT_ENOUGH_COINS_FOR_BET') {
+        mmStatusBoxEl.textContent = msg.message || 'Недостаточно монет для такой ставки!';
+        showError(msg.message || 'Недостаточно монет для такой ставки!');
+        return;
+      }
       if (msg.code === 'NO_BOSS_ATTEMPTS') {
         botsErrorEl.textContent =
           msg.message || 'Попытки на Босса закончились! Посмотри рекламу внизу.';
@@ -913,6 +1082,7 @@ function connectWebSocket(onOpen?: () => void): void {
 
     if (msg.type === 'room') {
       roomCode = msg.code;
+      roomBet = msg.bet ?? 0;
       youIndex = msg.youIndex;
       roomPlayers = msg.players;
       paused = Boolean(msg.paused);
@@ -949,6 +1119,11 @@ function connectWebSocket(onOpen?: () => void): void {
       screenQuests.classList.add('hidden');
       screenInventory.classList.add('hidden');
       screenChests.classList.add('hidden');
+      screenMatchmaking.classList.add('hidden');
+      screenStats.classList.add('hidden');
+      mmSearching = false;
+      btnStartMm.classList.remove('hidden');
+      btnCancelMm.classList.add('hidden');
       latestSnapshot = null;
       predictedCur = null;
       pendingInputs = [];
@@ -1003,8 +1178,17 @@ function connectWebSocket(onOpen?: () => void): void {
 
       const earned = msg.coinsEarned?.[youIndex] ?? 0;
       const xp = msg.xpEarned?.[youIndex] ?? 0;
-      let rewardHtml = earned > 0 ? `+${earned} 🪙 Монет` : '';
+      const rDelta = msg.ratingDelta?.[youIndex] ?? 0;
+      const newR = msg.newRating?.[youIndex];
+      let rewardHtml = earned > 0 ? `+${earned} 🪙 Монет` : '0 🪙';
       if (xp > 0) rewardHtml += ` • +${xp} XP`;
+      if (newR !== undefined) {
+        const rSign = rDelta >= 0 ? `+${rDelta}` : `${rDelta}`;
+        rewardHtml += `<div style="font-size:14px;color:${rDelta >= 0 ? '#4ade80' : '#fda4af'};margin-top:3px">🏆 Рейтинг: ${rSign} (${newR})</div>`;
+      }
+      if (msg.betPot && msg.betPot > 0 && msg.winner === youIndex) {
+        rewardHtml += `<div style="font-size:13px;color:#fde047;margin-top:3px">💰 Выигрыш банка Coin Duel: ${msg.betPot} 🪙!</div>`;
+      }
       if (msg.bonusChestReward) {
         const bDef = config.abilities[msg.bonusChestReward.abilityId];
         rewardHtml += `<div style="font-size:13px;color:#4ade80;margin-top:4px">🪵 Трофей Босса Дня: ${bDef ? bDef.name : msg.bonusChestReward.abilityId} (Ур.${msg.bonusChestReward.newLevel})!</div>`;
