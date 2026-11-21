@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BotController,
   DEFAULT_CONFIG,
   SeededRng,
   activateAbility,
@@ -438,5 +439,32 @@ describe('Ядро DUAL TETRIS (@dual-tetris/core)', () => {
     expect(p0.energy.green).toBe(14);
     expect(p0.energy.blue).toBe(14);
     expect(p0.energy.red).toBe(14);
+  });
+
+  it('Фаза 3: 4 уровня сложности ботов (Easy, Medium, Hard, Boss с 120 HP) и тактическое применение способностей ботом', () => {
+    const bossProfile = DEFAULT_CONFIG.bot.difficulties.boss;
+    expect(bossProfile.maxHp).toBe(120);
+    expect(bossProfile.loadout[0].abilityId).toBe('vampire');
+
+    const state = createMatch(
+      4040,
+      DEFAULT_CONFIG,
+      [undefined, bossProfile.loadout],
+      [100, bossProfile.maxHp]
+    );
+    expect(state.players[1].hp).toBe(120);
+    expect(state.players[1].maxHp).toBe(120);
+
+    // Дадим Боссу 35 красной энергии для Армагеддона (слот 2)
+    state.players[1].energy.red = 35;
+    const bot = new BotController(1, 4040, 'boss');
+    bot.step(state, 0.2);
+
+    expect(state.players[1].energy.red).toBe(0);
+    expect(
+      state.events.some(
+        (ev) => ev.type === 'ability_activated' && ev.player === 1 && ev.abilityId === 'armageddon'
+      )
+    ).toBe(true);
   });
 });

@@ -18,6 +18,23 @@ export type AbilityEffectType =
   | 'energy_surge';
 
 export type ChestTier = 'wooden' | 'silver' | 'gold' | 'legendary';
+export type BotDifficulty = 'easy' | 'medium' | 'hard' | 'boss';
+
+export interface BotDifficultyProfile {
+  id: BotDifficulty;
+  name: string;
+  actionIntervalSec: number;
+  mistakeProbability: number;
+  maxHp: number;
+  winCoins: number;
+  xpReward: number;
+  loadout: [
+    { abilityId: string | null; level: number },
+    { abilityId: string | null; level: number },
+    { abilityId: string | null; level: number },
+    { abilityId: string | null; level: number },
+  ];
+}
 
 export interface ChestDefinition {
   id: ChestTier;
@@ -34,6 +51,9 @@ export interface EconomyConfig {
   maxAbilityLevel: number;
   levelBonusPerStep: number;
   maxLevelDuplicateRefundRatio: number;
+  dailyBossFreeAttempts: number;
+  dailyBossMaxAdAttempts: number;
+  bossFirstWinChest: ChestTier;
   chests: Record<ChestTier, ChestDefinition>;
 }
 
@@ -116,7 +136,7 @@ export interface GameConfig {
   reconnectTimeoutSec: number;
   /** Время жизни пустой комнаты в секундах (4) */
   emptyRoomTtlSec: number;
-  /** Настройки бота (7) */
+  /** Настройки бота (7, Фаза 3) */
   bot: {
     actionIntervalSec: number;
     mistakeProbability: number;
@@ -124,6 +144,7 @@ export interface GameConfig {
     weightAggregateHeight: number;
     weightHoles: number;
     weightBumpiness: number;
+    difficulties: Record<BotDifficulty, BotDifficultyProfile>;
   };
   /** Настройки мобильных свайпов (6) */
   touch: {
@@ -361,6 +382,9 @@ export const DEFAULT_CONFIG: GameConfig = {
     maxAbilityLevel: 5,
     levelBonusPerStep: 0.1,
     maxLevelDuplicateRefundRatio: 0.5,
+    dailyBossFreeAttempts: 3,
+    dailyBossMaxAdAttempts: 3,
+    bossFirstWinChest: 'wooden',
     chests: {
       wooden: {
         id: 'wooden',
@@ -400,6 +424,68 @@ export const DEFAULT_CONFIG: GameConfig = {
     weightAggregateHeight: -0.51,
     weightHoles: -0.54,
     weightBumpiness: -0.18,
+    difficulties: {
+      easy: {
+        id: 'easy',
+        name: 'Лёгкий Бот',
+        actionIntervalSec: 0.55,
+        mistakeProbability: 0.4,
+        maxHp: 100,
+        winCoins: 20,
+        xpReward: 15,
+        loadout: [
+          { abilityId: 'heal', level: 1 },
+          { abilityId: null, level: 1 },
+          { abilityId: 'destroy_cell', level: 1 },
+          { abilityId: null, level: 1 },
+        ],
+      },
+      medium: {
+        id: 'medium',
+        name: 'Средний Бот',
+        actionIntervalSec: 0.4,
+        mistakeProbability: 0.25,
+        maxHp: 100,
+        winCoins: 35,
+        xpReward: 25,
+        loadout: [
+          { abilityId: 'heal', level: 2 },
+          { abilityId: 'freeze', level: 2 },
+          { abilityId: 'destroy_cell', level: 2 },
+          { abilityId: 'joker', level: 2 },
+        ],
+      },
+      hard: {
+        id: 'hard',
+        name: 'Сложный Бот',
+        actionIntervalSec: 0.26,
+        mistakeProbability: 0.08,
+        maxHp: 100,
+        winCoins: 55,
+        xpReward: 40,
+        loadout: [
+          { abilityId: 'mega_heal', level: 3 },
+          { abilityId: 'deep_freeze', level: 3 },
+          { abilityId: 'laser_row', level: 3 },
+          { abilityId: 'joker_rain', level: 3 },
+        ],
+      },
+      boss: {
+        id: 'boss',
+        name: '👑 Босс Дня',
+        actionIntervalSec: 0.16,
+        mistakeProbability: 0.0,
+        maxHp: 120,
+        winCoins: 100,
+        xpReward: 80,
+        loadout: [
+          { abilityId: 'vampire', level: 4 },
+          { abilityId: 'cryo_storm', level: 4 },
+          { abilityId: 'armageddon', level: 4 },
+          { abilityId: 'energy_surge', level: 4 },
+        ],
+      },
+    },
   },
   touch: {
     lockThresholdCells: 0.5,

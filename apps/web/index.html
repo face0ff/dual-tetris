@@ -456,11 +456,16 @@
           <button id="btn-join-room" class="btn btn-blue" style="white-space:nowrap">Войти</button>
         </div>
 
-        <div class="divider">одиночный режим</div>
+        <div class="divider">одиночный режим и задания</div>
 
-        <button id="btn-bot-match" class="btn btn-secondary">
-          🤖 Тренировка против бота
-        </button>
+        <div class="row">
+          <button id="btn-bot-match" class="btn btn-secondary" style="flex:1">
+            🤖 Боты и Босс
+          </button>
+          <button id="btn-open-quests" class="btn btn-secondary" style="flex:1; border-color:#38bdf8; color:#38bdf8">
+            📋 Задания дня
+          </button>
+        </div>
 
         <div class="rules-box">
           <div><strong>Линии бьют волной и копят цветную энергию!</strong></div>
@@ -568,6 +573,64 @@
             <button data-chest="legendary" class="btn btn-primary btn-buy-chest" style="width:100%; padding:8px; background:linear-gradient(135deg,#eab308,#ca8a04)">🪙 1000</button>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Экран выбора уровня Бота и Босса Дня (Фаза 3) -->
+    <div id="screen-bots" class="overlay hidden">
+      <div class="card">
+        <div style="display:flex; align-items:center; justify-content:space-between">
+          <h2 class="logo-title" style="font-size:20px">🤖 БОТЫ И БОСС ДНЯ</h2>
+          <button id="btn-close-bots" class="icon-btn">✕</button>
+        </div>
+        <div id="bots-error" class="error-toast hidden"></div>
+        <div class="chest-grid">
+          <div class="chest-card">
+            <div style="font-size:24px">🟢</div>
+            <div style="font-weight:800; font-size:13px">Лёгкий (Easy)</div>
+            <div style="font-size:11px; color:#94a3b8">Обучение • 100 HP</div>
+            <div style="font-size:11px; color:#4ade80; font-weight:700">Награда: +20 🪙</div>
+            <button data-diff="easy" class="btn btn-secondary btn-start-bot" style="width:100%; padding:8px">В бой</button>
+          </div>
+          <div class="chest-card">
+            <div style="font-size:24px">🔵</div>
+            <div style="font-weight:800; font-size:13px; color:#38bdf8">Средний (Medium)</div>
+            <div style="font-size:11px; color:#94a3b8">4 способн. Ур.2 • 100 HP</div>
+            <div style="font-size:11px; color:#4ade80; font-weight:700">Награда: +35 🪙</div>
+            <button data-diff="medium" class="btn btn-blue btn-start-bot" style="width:100%; padding:8px">В бой</button>
+          </div>
+          <div class="chest-card">
+            <div style="font-size:24px">🟣</div>
+            <div style="font-weight:800; font-size:13px; color:#c084fc">Сложный (Hard)</div>
+            <div style="font-size:11px; color:#94a3b8">Rare/Epic Ур.3 • 100 HP</div>
+            <div style="font-size:11px; color:#4ade80; font-weight:700">Награда: +55 🪙</div>
+            <button data-diff="hard" class="btn btn-primary btn-start-bot" style="width:100%; padding:8px">В бой</button>
+          </div>
+          <div class="chest-card" style="border-color:#facc15">
+            <div style="font-size:24px">👑</div>
+            <div style="font-weight:800; font-size:13px; color:#facc15">БОСС ДНЯ</div>
+            <div style="font-size:11px; color:#fde047">Легендарки Ур.4 • 120 HP</div>
+            <div style="font-size:11px; color:#4ade80; font-weight:700">+100 🪙 + 🪵 Сундук</div>
+            <div id="boss-attempts-label" style="font-size:11px; color:#cbd5e1">Попыток: 3/3</div>
+            <button data-diff="boss" class="btn btn-primary btn-start-bot" style="width:100%; padding:8px; background:linear-gradient(135deg,#eab308,#ca8a04)">Бой с Боссом</button>
+          </div>
+        </div>
+        <div id="ad-box" class="reward-banner">
+          <div id="ad-status-text" style="font-size:12px; color:#cbd5e1; margin-bottom:6px">Нужна дополнительная попытка на Босса Дня?</div>
+          <button id="btn-watch-ad" class="btn btn-blue" style="width:100%; padding:9px; font-size:13px">🎬 Смотреть рекламу (+1 попытка)</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Экран ежедневных заданий (Фаза 3) -->
+    <div id="screen-quests" class="overlay hidden">
+      <div class="card">
+        <div style="display:flex; align-items:center; justify-content:space-between">
+          <h2 class="logo-title" style="font-size:20px">📋 ЗАДАНИЯ ДНЯ (UTC)</h2>
+          <button id="btn-close-quests" class="icon-btn">✕</button>
+        </div>
+        <div id="quests-date-label" style="font-size:11.5px; color:#94a3b8">Обновление каждый день в 00:00 UTC</div>
+        <div id="quests-list" class="ability-list"></div>
       </div>
     </div>
   </div>

@@ -374,4 +374,91 @@ describe('Интеграционные и нагрузочные тесты се
     c1.close();
     c2.close();
   });
+
+  it('Фаза 3 по WebSocket: уровни ботов, лимит попыток на Босса, Rewarded Ad (+1 попытка), трофейный сундук Босса и ежедневные задания', async () => {
+    server = createDualTetrisServer();
+    const port = await server.listen(0, '127.0.0.1');
+
+    const c1 = await TestWsClient.connect(port);
+    c1.send({ type: 'auth_profile', playerId: 'phase3_hero', name: 'Герой' });
+    const initProf = await c1.waitFor('profile');
+    expect(initProf.profile.daily.bossAttemptsRemaining).toBe(3);
+
+    // 1. Потратим все 3 бесплатные попытки на Босса
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      c1.messages.length = 0;
+      c1.send({
+        type: 'start_bot_match',
+        name: 'Герой',
+        playerId: 'phase3_hero',
+        difficulty: 'boss',
+      });
+      await c1.waitFor('match_start');
+      const snap = await c1.waitFor('snapshot');
+      // Проверим, что у Босса (игрок 1) 120 HP
+      expect(snap.maxHp?.[1]).toBe(120);
+      expect(snap.hp[1]).toBe(120);
+      c1.send({ type: 'leave' });
+    }
+
+    // 2. 4-я попытка на Босса должна вернуть ошибку NO_BOSS_ATTEMPTS
+    c1.messages.length = 0;
+    c1.send({
+      type: 'start_bot_match',
+      name: 'Герой',
+      playerId: 'phase3_hero',
+      difficulty: 'boss',
+    });
+    const noAttErr = await c1.waitFor('error', (e) => e.code === 'NO_BOSS_ATTEMPTS');
+    expect(noAttErr.code).toBe('NO_BOSS_ATTEMPTS');
+
+    // 3. Просмотр Rewarded Ad восстанавливает +1 попытку (повтор с тем же requestId идемпотентен)
+    c1.messages.length = 0;
+    c1.send({ type: 'watch_rewarded_ad', requestId: 'ad-req-1' });
+    c1.send({ type: 'watch_rewarded_ad', requestId: 'ad-req-1' });
+    const profAfterAd = await c1.waitFor('profile');
+    expect(profAfterAd.profile.daily.bossAttemptsRemaining).toBe(1);
+    expect(profAfterAd.profile.daily.adAttemptsUsedToday).toBe(1);
+
+    // 4. Побеждаем Босса на полученной попытке и получаем +100 монет, +80 XP и трофейный сундук!
+    c1.messages.length = 0;
+    c1.send({
+      type: 'start_bot_match',
+      name: 'Герой',
+      playerId: 'phase3_hero',
+      difficulty: 'boss',
+    });
+    const roomMsg = await c1.waitFor('room');
+    await c1.waitFor('match_start');
+
+    const activeRoom = server.rooms.get(roomMsg.code)!;
+    // Обнулим HP Босса, чтобы зафиксировать победу игрока 0 в ближайший тик
+    activeRoom.match!.players[1].hp = 0;
+
+    const endMsg = await c1.waitFor('match_end', undefined, 3000);
+    expect(endMsg.winner).toBe(0);
+    expect(endMsg.coinsEarned?.[0]).toBe(100);
+    expect(endMsg.xpEarned?.[0]).toBe(80);
+    expect(endMsg.bonusChestReward).toBeDefined();
+
+    // 5. Проверим выполнение и получение награды за ежедневное задание
+    const profNow = server.store.getOrCreateProfile('phase3_hero');
+    const qPlay = profNow.daily.quests.find((q) => q.id === 'play_3_matches')!;
+    // Доведём прогресс до 3/3
+    server.store.recordMatchResult(['phase3_hero', undefined], 0, true, 'easy');
+    server.store.recordMatchResult(['phase3_hero', undefined], 0, true, 'easy');
+
+    c1.messages.length = 0;
+    c1.send({
+      type: 'claim_daily_quest',
+      questId: 'play_3_matches',
+      requestId: 'claim-q1',
+    });
+    const claimedProf = await c1.waitFor('profile');
+    const claimedQuest = claimedProf.profile.daily.quests.find((q) => q.id === 'play_3_matches')!;
+    expect(claimedQuest.claimed).toBe(true);
+    expect(claimedProf.profile.xp).toBeGreaterThanOrEqual(80 + qPlay.rewardXp);
+
+    c1.close();
+  });
 });

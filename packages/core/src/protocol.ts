@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AbilityRarity, ChestTier, GameConfig } from './config.js';
+import type { AbilityRarity, BotDifficulty, ChestTier, GameConfig } from './config.js';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -7,6 +7,7 @@ export const InputActionSchema = z.enum(['L', 'R', 'ROT', 'SD', 'HD']);
 export type InputAction = z.infer<typeof InputActionSchema>;
 
 export const ChestTierSchema = z.enum(['wooden', 'silver', 'gold', 'legendary']);
+export const BotDifficultySchema = z.enum(['easy', 'medium', 'hard', 'boss']);
 
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
@@ -65,6 +66,16 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('start_bot_match'),
     name: z.string().max(24).optional(),
     playerId: z.string().max(64).optional(),
+    difficulty: BotDifficultySchema.optional(),
+  }),
+  z.object({
+    type: z.literal('watch_rewarded_ad'),
+    requestId: z.string().min(1).max(64),
+  }),
+  z.object({
+    type: z.literal('claim_daily_quest'),
+    questId: z.string().min(1).max(40),
+    requestId: z.string().min(1).max(64),
   }),
   z.object({
     type: z.literal('activate_ability'),
@@ -125,14 +136,35 @@ export interface PlayerStats {
   matches: number;
 }
 
+export interface DailyQuestProgress {
+  id: string;
+  title: string;
+  target: number;
+  progress: number;
+  rewardCoins: number;
+  rewardXp: number;
+  claimed: boolean;
+}
+
+export interface PlayerDailyState {
+  dateUtc: string;
+  bossAttemptsRemaining: number;
+  adAttemptsUsedToday: number;
+  bossFirstWinClaimedToday: boolean;
+  quests: DailyQuestProgress[];
+}
+
 export interface PlayerProfileData {
   playerId: string;
   name: string;
   avatar: string;
   coins: number;
+  xp: number;
+  level: number;
   ownedAbilities: Record<string, OwnedAbility>;
   loadout: [string | null, string | null, string | null, string | null];
   stats: PlayerStats;
+  daily: PlayerDailyState;
 }
 
 export interface ChestRewardResult {
@@ -200,6 +232,7 @@ export interface SnapshotMessage {
   ackSeq: [number, number];
   boards: [number[][], number[][]];
   hp: [number, number];
+  maxHp?: [number, number];
   combo: [number, number];
   freeze: [number, number];
   jokers: [number, number];
@@ -239,6 +272,8 @@ export type ServerMessage =
       reason: 'ko' | 'forfeit' | 'draw';
       hp: [number, number];
       coinsEarned?: [number, number];
+      xpEarned?: [number, number];
+      bonusChestReward?: ChestRewardResult;
     }
   | {
       type: 'profile';

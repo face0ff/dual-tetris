@@ -6,6 +6,7 @@ import {
   getLowestEmptyRow,
   rotateMatrixCW,
   type ActivePiece,
+  type BotDifficulty,
   type ChestRewardResult,
   type ChestTier,
   type ClientMessage,
@@ -145,6 +146,19 @@ const btnCloseChests = document.getElementById('btn-close-chests') as HTMLButton
 const chestsCoinsEl = document.getElementById('chests-coins')!;
 const chestRewardBoxEl = document.getElementById('chest-reward-box')!;
 
+const screenBots = document.getElementById('screen-bots')!;
+const btnCloseBots = document.getElementById('btn-close-bots') as HTMLButtonElement;
+const botsErrorEl = document.getElementById('bots-error')!;
+const bossAttemptsLabelEl = document.getElementById('boss-attempts-label')!;
+const adStatusTextEl = document.getElementById('ad-status-text')!;
+const btnWatchAd = document.getElementById('btn-watch-ad') as HTMLButtonElement;
+
+const btnOpenQuests = document.getElementById('btn-open-quests') as HTMLButtonElement;
+const screenQuests = document.getElementById('screen-quests')!;
+const btnCloseQuests = document.getElementById('btn-close-quests') as HTMLButtonElement;
+const questsDateLabelEl = document.getElementById('quests-date-label')!;
+const questsListEl = document.getElementById('quests-list')!;
+
 const pingBadge = document.getElementById('ping-badge')!;
 const btnSound = document.getElementById('btn-sound') as HTMLButtonElement;
 const btnLeaveMatch = document.getElementById('btn-leave-match') as HTMLButtonElement;
@@ -281,9 +295,66 @@ function renderProfileUI(): void {
   btnAvatar.textContent = myProfile.avatar || myAvatar;
   profileCoinsEl.textContent = `🪙 ${myProfile.coins}`;
   chestsCoinsEl.textContent = `🪙 ${myProfile.coins}`;
-  profileStatsText.textContent = `🏆 ${myProfile.stats.wins} побед • ${myProfile.stats.matches} боёв`;
+  profileStatsText.textContent = `Ур.${myProfile.level ?? 1} (${myProfile.xp ?? 0} XP) • 🏆 ${myProfile.stats.wins}/${myProfile.stats.matches}`;
   btnOpenInventory.textContent = `🎒 Колода (${ownedCount}/${totalAbilities})`;
   inventoryCountEl.textContent = `${ownedCount}/${totalAbilities}`;
+
+  // Обновление попыток на Босса и статуса рекламы (Фаза 3)
+  if (myProfile.daily) {
+    const rem = myProfile.daily.bossAttemptsRemaining;
+    const adUsed = myProfile.daily.adAttemptsUsedToday;
+    const maxAd = config.economy.dailyBossMaxAdAttempts;
+    bossAttemptsLabelEl.textContent = `Попыток сегодня: ${rem}`;
+    adStatusTextEl.textContent = `Доп. попытки за рекламу сегодня: ${maxAd - adUsed} из ${maxAd}`;
+    btnWatchAd.disabled = adUsed >= maxAd;
+
+    const claimableCount = myProfile.daily.quests.filter(
+      (q) => q.progress >= q.target && !q.claimed
+    ).length;
+    btnOpenQuests.textContent =
+      claimableCount > 0 ? `📋 Задания (${claimableCount}!)` : '📋 Задания дня';
+    questsDateLabelEl.textContent = `День UTC: ${myProfile.daily.dateUtc} • Сброс в 00:00 UTC`;
+
+    questsListEl.innerHTML = '';
+    for (const q of myProfile.daily.quests) {
+      const item = document.createElement('div');
+      item.className = 'ability-item';
+      const done = q.progress >= q.target;
+      item.style.borderLeft = `4px solid ${q.claimed ? '#475569' : done ? '#22c55e' : '#38bdf8'}`;
+      const info = document.createElement('div');
+      info.style.flex = '1';
+      info.innerHTML = `
+        <div style="font-weight:700;font-size:13px">${q.title}</div>
+        <div style="font-size:11.5px;color:#94a3b8;margin-top:2px">
+          Прогресс: <b>${q.progress}/${q.target}</b> • Награда: <span style="color:#fde047">+${q.rewardCoins} 🪙</span> и <span style="color:#38bdf8">+${q.rewardXp} XP</span>
+        </div>
+      `;
+      item.append(info);
+
+      const qBtn = document.createElement('button');
+      qBtn.className = q.claimed
+        ? 'btn btn-secondary'
+        : done
+          ? 'btn btn-primary'
+          : 'btn btn-secondary';
+      qBtn.style.padding = '7px 10px';
+      qBtn.style.fontSize = '12px';
+      qBtn.disabled = q.claimed || !done;
+      qBtn.textContent = q.claimed ? 'Получено ✓' : done ? 'Забрать!' : `${q.progress}/${q.target}`;
+      if (done && !q.claimed) {
+        qBtn.addEventListener('click', () => {
+          sendMsg({
+            type: 'claim_daily_quest',
+            questId: q.id,
+            requestId: `q_${myPlayerId}_${q.id}_${myProfile?.daily.dateUtc}`,
+          });
+          sfx.lineClear(2);
+        });
+      }
+      item.append(qBtn);
+      questsListEl.append(item);
+    }
+  }
 
   // Отрисовка 4 слотов колоды в модалке инвентаря
   inventoryLoadoutSlotsEl.innerHTML = '';
@@ -397,6 +468,58 @@ btnOpenChests.addEventListener('click', () => {
 });
 btnCloseChests.addEventListener('click', () => {
   screenChests.classList.add('hidden');
+});
+
+btnCloseBots.addEventListener('click', () => {
+  screenBots.classList.add('hidden');
+});
+
+btnOpenQuests.addEventListener('click', () => {
+  renderProfileUI();
+  screenQuests.classList.remove('hidden');
+});
+btnCloseQuests.addEventListener('click', () => {
+  screenQuests.classList.add('hidden');
+});
+
+document.querySelectorAll<HTMLButtonElement>('.btn-start-bot').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const difficulty = (btn.dataset.diff as BotDifficulty) || 'medium';
+    const name = savePlayerName();
+    botsErrorEl.classList.add('hidden');
+    connectWebSocket(() => {
+      sendMsg({
+        type: 'start_bot_match',
+        name,
+        playerId: myPlayerId,
+        difficulty,
+      });
+    });
+  });
+});
+
+let adReqSeq = 1;
+let adTimerId: ReturnType<typeof setInterval> | null = null;
+btnWatchAd.addEventListener('click', () => {
+  if (adTimerId) return;
+  let secLeft = 5;
+  btnWatchAd.disabled = true;
+  btnWatchAd.textContent = `🎬 Реклама идёт... (${secLeft} с)`;
+  adTimerId = setInterval(() => {
+    secLeft -= 1;
+    if (secLeft > 0) {
+      btnWatchAd.textContent = `🎬 Реклама идёт... (${secLeft} с)`;
+    } else {
+      if (adTimerId) clearInterval(adTimerId);
+      adTimerId = null;
+      btnWatchAd.textContent = '🎬 Смотреть рекламу (+1 попытка)';
+      sendMsg({
+        type: 'watch_rewarded_ad',
+        requestId: `ad_${myPlayerId}_${Date.now()}_${adReqSeq++}`,
+      });
+      sfx.lineClear(1);
+    }
+  }, 1000);
 });
 
 let chestReqSeq = 1;
@@ -761,6 +884,12 @@ function connectWebSocket(onOpen?: () => void): void {
     }
 
     if (msg.type === 'error') {
+      if (msg.code === 'NO_BOSS_ATTEMPTS') {
+        botsErrorEl.textContent =
+          msg.message || 'Попытки на Босса закончились! Посмотри рекламу внизу.';
+        botsErrorEl.classList.remove('hidden');
+        return;
+      }
       if (msg.code === 'NOT_ENOUGH_COINS') {
         chestRewardBoxEl.classList.remove('hidden');
         chestRewardBoxEl.innerHTML = `<div style="color:#fda4af;font-weight:700">Недостаточно монет 🪙! Побеждай в матчах, чтобы заработать монеты.</div>`;
@@ -816,6 +945,10 @@ function connectWebSocket(onOpen?: () => void): void {
       config = msg.config;
       youIndex = msg.youIndex;
       roomState = 'playing';
+      screenBots.classList.add('hidden');
+      screenQuests.classList.add('hidden');
+      screenInventory.classList.add('hidden');
+      screenChests.classList.add('hidden');
       latestSnapshot = null;
       predictedCur = null;
       pendingInputs = [];
@@ -869,7 +1002,14 @@ function connectWebSocket(onOpen?: () => void): void {
       updateScreens();
 
       const earned = msg.coinsEarned?.[youIndex] ?? 0;
-      resultCoinsEarnedEl.textContent = earned > 0 ? `+${earned} 🪙 Монет!` : '';
+      const xp = msg.xpEarned?.[youIndex] ?? 0;
+      let rewardHtml = earned > 0 ? `+${earned} 🪙 Монет` : '';
+      if (xp > 0) rewardHtml += ` • +${xp} XP`;
+      if (msg.bonusChestReward) {
+        const bDef = config.abilities[msg.bonusChestReward.abilityId];
+        rewardHtml += `<div style="font-size:13px;color:#4ade80;margin-top:4px">🪵 Трофей Босса Дня: ${bDef ? bDef.name : msg.bonusChestReward.abilityId} (Ур.${msg.bonusChestReward.newLevel})!</div>`;
+      }
+      resultCoinsEarnedEl.innerHTML = rewardHtml;
 
       if (msg.winner === null) {
         resultTitleEl.textContent = S.draw;
@@ -926,10 +1066,9 @@ inputRoomCode.addEventListener('keydown', (e) => {
 });
 
 btnBotMatch.addEventListener('click', () => {
-  const name = savePlayerName();
-  connectWebSocket(() => {
-    sendMsg({ type: 'start_bot_match', name, playerId: myPlayerId });
-  });
+  botsErrorEl.classList.add('hidden');
+  renderProfileUI();
+  screenBots.classList.remove('hidden');
 });
 
 btnCopyLink.addEventListener('click', async () => {
@@ -1173,6 +1312,7 @@ function drawPlayerBoard(playerIndex: 0 | 1, isOpponent: boolean, barColor: stri
   const oy = isOpponent ? ET : MT;
   const board = latestSnapshot.boards[playerIndex];
   const hp = latestSnapshot.hp[playerIndex];
+  const playerMaxHp = latestSnapshot.maxHp?.[playerIndex] ?? config.maxHp;
   const combo = latestSnapshot.combo[playerIndex];
   const freeze = latestSnapshot.freeze[playerIndex];
   const nextPiece = latestSnapshot.next[playerIndex];
@@ -1305,10 +1445,10 @@ function drawPlayerBoard(playerIndex: 0 | 1, isOpponent: boolean, barColor: stri
   g2.fillStyle = '#1f2937';
   g2.fillRect(BX, by, BW, 12);
   g2.fillStyle = hp < config.rageHpThreshold ? '#ef4444' : barColor;
-  g2.fillRect(BX, by, (BW * Math.max(0, hp)) / config.maxHp, 12);
+  g2.fillRect(BX, by, (BW * Math.max(0, hp)) / playerMaxHp, 12);
   g2.fillStyle = '#fff';
   g2.font = 'bold 10px system-ui';
-  g2.fillText(`${Math.max(0, Math.round(hp))} / ${config.maxHp}`, BX + 5, by + 9.5);
+  g2.fillText(`${Math.max(0, Math.round(hp))} / ${playerMaxHp}`, BX + 5, by + 9.5);
 
   // Панель из 4 слотов способностей и энергии игрока внизу экрана (Фаза 1А + 1Б)
   if (!isOpponent) {

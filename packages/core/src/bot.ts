@@ -1,4 +1,4 @@
-import type { GameConfig } from './config.js';
+import type { BotDifficulty, GameConfig } from './config.js';
 import {
   activateAbility,
   applyPlayerInput,
@@ -15,14 +15,16 @@ export interface BotPlan {
 
 export class BotController {
   public playerIndex: 0 | 1;
+  public difficulty: BotDifficulty;
   private timer = 0;
   private currentRotationCount = 0;
   private plan: BotPlan | null = null;
   private lastPieceRef: number[][] | null = null;
   private rng: SeededRng;
 
-  constructor(playerIndex: 0 | 1, seed: number) {
+  constructor(playerIndex: 0 | 1, seed: number, difficulty: BotDifficulty = 'medium') {
     this.playerIndex = playerIndex;
+    this.difficulty = difficulty;
     this.rng = new SeededRng(seed ^ 0x5f3759df);
   }
 
@@ -116,7 +118,10 @@ export class BotController {
       m = rotateMatrixCW(m);
     }
 
-    if (best && this.rng.next() < config.bot.mistakeProbability) {
+    const diffProfile = config.bot.difficulties?.[this.difficulty];
+    const mistakeProb = diffProfile ? diffProfile.mistakeProbability : config.bot.mistakeProbability;
+
+    if (best && this.rng.next() < mistakeProb) {
       const shift = this.rng.next() < 0.5 ? -1 : 1;
       best = {
         ...best,
@@ -131,13 +136,22 @@ export class BotController {
     if (state.finished) return;
     const p = state.players[this.playerIndex];
 
-    // Бот проверяет возможность использовать способности (лечение работает даже в заморозке)
+    // Бот проверяет возможность использовать способности (с учётом тактики)
     for (let slotIdx = 0; slotIdx < 4; slotIdx++) {
       const slot = p.abilities[slotIdx];
       if (!slot?.abilityId) continue;
       const def = state.config.abilities[slot.abilityId];
       if (!def) continue;
-      if (def.effectType === 'heal' && p.hp > state.config.maxHp - (def.params.amount ?? 15)) {
+      if (
+        (def.effectType === 'heal' || def.effectType === 'mega_heal') &&
+        p.hp > p.maxHp - (def.params.amount ?? 15)
+      ) {
+        continue;
+      }
+      if (
+        def.effectType === 'wave_shield' &&
+        !state.waves.some((w) => w.owner !== this.playerIndex)
+      ) {
         continue;
       }
       activateAbility(state, this.playerIndex, slotIdx);
@@ -150,8 +164,13 @@ export class BotController {
       this.currentRotationCount = 0;
     }
 
+    const diffProfile = state.config.bot.difficulties?.[this.difficulty];
+    const actionInterval = diffProfile
+      ? diffProfile.actionIntervalSec
+      : state.config.bot.actionIntervalSec;
+
     this.timer += dt;
-    if (this.timer < state.config.bot.actionIntervalSec) {
+    if (this.timer < actionInterval) {
       return;
     }
     this.timer = 0;

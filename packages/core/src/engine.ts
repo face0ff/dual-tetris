@@ -90,6 +90,7 @@ export interface PlayerState {
   index: 0 | 1;
   board: number[][];
   hp: number;
+  maxHp: number;
   combo: number;
   bag: number[];
   cur: ActivePiece;
@@ -167,7 +168,8 @@ export function spawnPiece(state: MatchState, playerIndex: 0 | 1): void {
 export function createMatch(
   seed: number,
   config: GameConfig = DEFAULT_CONFIG,
-  playerLoadouts?: [AbilitySlots?, AbilitySlots?]
+  playerLoadouts?: [AbilitySlots?, AbilitySlots?],
+  playerMaxHps?: [number?, number?]
 ): MatchState {
   const createPlayer = (index: 0 | 1): PlayerState => {
     const rng = new SeededRng(seed + index * 100003);
@@ -177,6 +179,7 @@ export function createMatch(
     const second = drawNextPiece(temp);
     const spawnX = Math.floor((config.boardWidth - first.m[0].length) / 2);
     const customSlots = playerLoadouts?.[index];
+    const pMaxHp = playerMaxHps?.[index] ?? config.maxHp;
     const abilities: AbilitySlots = customSlots
       ? (customSlots.map((s) => ({
           abilityId: s.abilityId ?? null,
@@ -191,7 +194,8 @@ export function createMatch(
     return {
       index,
       board: createEmptyBoard(config.boardWidth, config.boardHeight),
-      hp: config.maxHp,
+      hp: pMaxHp,
+      maxHp: pMaxHp,
       combo: 0,
       bag: temp.bag,
       cur: {
@@ -342,7 +346,7 @@ export function lockPiece(state: MatchState, playerIndex: 0 | 1): void {
     if (config.autoColorEffects) {
       if (domColor === 1) {
         const healAmount = config.greenHealPerLine * burnedCount;
-        p.hp = Math.min(config.maxHp, p.hp + healAmount);
+        p.hp = Math.min(p.maxHp, p.hp + healAmount);
         state.events.push({
           type: 'heal',
           player: playerIndex,
@@ -498,7 +502,7 @@ export function applyHealAbility(
 ): void {
   const p = state.players[playerIndex];
   const amount = Math.max(1, params.amount ?? 15);
-  p.hp = Math.min(state.config.maxHp, p.hp + amount);
+  p.hp = Math.min(p.maxHp, p.hp + amount);
   state.events.push({
     type: 'heal',
     player: playerIndex,
@@ -1026,6 +1030,7 @@ export function createSnapshot(state: MatchState, clearEvents = true): SnapshotM
       state.players[1].board.map((r) => r.slice()),
     ],
     hp: [state.players[0].hp, state.players[1].hp],
+    maxHp: [state.players[0].maxHp, state.players[1].maxHp],
     combo: [state.players[0].combo, state.players[1].combo],
     freeze: [state.players[0].freezeRemaining, state.players[1].freezeRemaining],
     jokers: [state.players[0].jokersRemaining, state.players[1].jokersRemaining],
