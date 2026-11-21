@@ -20,6 +20,7 @@ import {
   type RoomState,
   type ServerMessage,
 } from '@dual-tetris/core';
+import { ProfileStore } from './store.js';
 
 const ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -36,6 +37,7 @@ function generateRoomCode(existing: Set<string>): string {
 
 interface PlayerSlot {
   index: 0 | 1;
+  playerId?: string;
   name: string;
   sessionToken: string;
   ws: WebSocket | null;
@@ -66,6 +68,7 @@ export interface DualTetrisServer {
   httpServer: http.Server;
   wss: WebSocketServer;
   rooms: Map<string, Room>;
+  store: ProfileStore;
   listen: (port?: number, host?: string) => Promise<number>;
   close: () => Promise<void>;
 }
@@ -85,19 +88,23 @@ export function getLanAddresses(): string[] {
 
 export function createDualTetrisServer(
   customConfig: Partial<GameConfig> = {},
-  staticDir?: string
+  staticDir?: string,
+  storeFilePath: string | null = null
 ): DualTetrisServer {
   const config: GameConfig = {
     ...DEFAULT_CONFIG,
     ...customConfig,
     defaultLoadout: customConfig.defaultLoadout ?? DEFAULT_CONFIG.defaultLoadout,
     abilities: { ...DEFAULT_CONFIG.abilities, ...(customConfig.abilities ?? {}) },
+    economy: { ...DEFAULT_CONFIG.economy, ...(customConfig.economy ?? {}) },
     bot: { ...DEFAULT_CONFIG.bot, ...(customConfig.bot ?? {}) },
     touch: { ...DEFAULT_CONFIG.touch, ...(customConfig.touch ?? {}) },
   };
 
+  const store = new ProfileStore(config, storeFilePath);
   const rooms = new Map<string, Room>();
   const socketToRoom = new Map<WebSocket, { room: Room; playerIndex: 0 | 1 }>();
+  const socketToPlayerId = new Map<WebSocket, string>();
 
   const send = (ws: WebSocket | null, msg: ServerMessage) => {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -143,7 +150,9 @@ export function createDualTetrisServer(
 
   const startMatchInRoom = (room: Room) => {
     const seed = Math.floor(Math.random() * 0x7fffffff) || 1;
-    room.match = createMatch(seed, room.config);
+    const p0Slots = store.getMatchAbilitySlots(room.players[0]?.playerId);
+    const p1Slots = store.getMatchAbilitySlots(room.players[1]?.playerId);
+    room.match = createMatch(seed, room.config, [p0Slots, p1Slots]);
     room.state = 'playing';
     room.paused = false;
     room.pauseRemainingSec = 0;
@@ -337,12 +346,59 @@ export function createDualTetrisServer(
         return;
       }
 
+      if (msg.type === 'auth_profile') {
+        const profile = store.getOrCreateProfile(msg.playerId, msg.name, msg.avatar);
+        socketToPlayerId.set(ws, profile.playerId);
+        send(ws, { type: 'profile', profile });
+        return;
+      }
+
+      if (msg.type === 'equip_loadout') {
+        const pid = socketToPlayerId.get(ws);
+        if (!pid) {
+          send(ws, { type: 'error', code: 'PROFILE_NOT_FOUND' });
+          return;
+        }
+        const res = store.equipLoadout(pid, msg.loadout);
+        if (!res.ok) {
+          send(ws, { type: 'error', code: res.errorCode });
+          return;
+        }
+        send(ws, { type: 'profile', profile: res.profile });
+        return;
+      }
+
+      if (msg.type === 'open_chest') {
+        const pid = socketToPlayerId.get(ws);
+        if (!pid) {
+          send(ws, { type: 'error', code: 'PROFILE_NOT_FOUND' });
+          return;
+        }
+        const res = store.openChest(pid, msg.chestId, msg.requestId);
+        if (!res.ok) {
+          send(ws, { type: 'error', code: res.errorCode });
+          return;
+        }
+        send(ws, {
+          type: 'chest_opened',
+          reward: res.reward,
+          profile: res.profile,
+        });
+        return;
+      }
+
       if (msg.type === 'create_room') {
         detachSocket(ws, true);
         const code = generateRoomCode(new Set(rooms.keys()));
         const token = msg.sessionToken || crypto.randomBytes(16).toString('hex');
+        const pid = msg.playerId || socketToPlayerId.get(ws);
+        if (pid) {
+          const prof = store.getOrCreateProfile(pid, msg.name);
+          socketToPlayerId.set(ws, prof.playerId);
+        }
         const slot0: PlayerSlot = {
           index: 0,
+          playerId: pid,
           name: (msg.name?.trim() || 'Игрок 1').slice(0, 24),
           sessionToken: token,
           ws,
@@ -378,8 +434,14 @@ export function createDualTetrisServer(
         detachSocket(ws, true);
         const code = generateRoomCode(new Set(rooms.keys()));
         const token = crypto.randomBytes(16).toString('hex');
+        const pid = msg.playerId || socketToPlayerId.get(ws);
+        if (pid) {
+          const prof = store.getOrCreateProfile(pid, msg.name);
+          socketToPlayerId.set(ws, prof.playerId);
+        }
         const slot0: PlayerSlot = {
           index: 0,
+          playerId: pid,
           name: (msg.name?.trim() || 'Ты').slice(0, 24),
           sessionToken: token,
           ws,
@@ -485,8 +547,14 @@ export function createDualTetrisServer(
         }
 
         const token = msg.sessionToken || crypto.randomBytes(16).toString('hex');
+        const pid = msg.playerId || socketToPlayerId.get(ws);
+        if (pid) {
+          const prof = store.getOrCreateProfile(pid, msg.name);
+          socketToPlayerId.set(ws, prof.playerId);
+        }
         const newSlot: PlayerSlot = {
           index: targetIndex,
+          playerId: pid,
           name: (msg.name?.trim() || `Игрок ${targetIndex + 1}`).slice(0, 24),
           sessionToken: token,
           ws,
@@ -577,6 +645,7 @@ export function createDualTetrisServer(
     });
 
     ws.on('close', () => {
+      socketToPlayerId.delete(ws);
       detachSocket(ws, false);
     });
   });
@@ -660,14 +729,29 @@ export function createDualTetrisServer(
 
         if (room.match.finished) {
           room.state = 'finished';
+          const isBotMatch = Boolean(room.players[1]?.isBot);
+          const coinsEarned = store.recordMatchResult(
+            [room.players[0]?.playerId, room.players[1]?.playerId],
+            room.match.winner,
+            isBotMatch
+          );
           const endMsg: ServerMessage = {
             type: 'match_end',
             winner: room.match.winner,
             reason: room.match.endReason ?? 'ko',
             hp: [room.match.players[0].hp, room.match.players[1].hp],
+            coinsEarned,
           };
           for (const p of room.players) {
-            if (p) send(p.ws, endMsg);
+            if (p) {
+              send(p.ws, endMsg);
+              if (p.playerId) {
+                send(p.ws, {
+                  type: 'profile',
+                  profile: store.getOrCreateProfile(p.playerId),
+                });
+              }
+            }
           }
           broadcastRoomState(room);
           console.log(
@@ -715,6 +799,7 @@ export function createDualTetrisServer(
     httpServer,
     wss,
     rooms,
+    store,
     listen,
     close,
   };

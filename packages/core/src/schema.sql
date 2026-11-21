@@ -1,0 +1,76 @@
+-- Схема базы данных PostgreSQL для Фазы 2 (п. 2.4 ТЗ update.md)
+
+CREATE TABLE IF NOT EXISTS users (
+  id VARCHAR(64) PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS player_profiles (
+  user_id VARCHAR(64) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  nickname VARCHAR(24) NOT NULL,
+  avatar VARCHAR(16) NOT NULL DEFAULT '👾',
+  wins INT NOT NULL DEFAULT 0,
+  losses INT NOT NULL DEFAULT 0,
+  draws INT NOT NULL DEFAULT 0,
+  matches INT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS player_wallets (
+  user_id VARCHAR(64) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  coins INT NOT NULL DEFAULT 300 CHECK (coins >= 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS abilities (
+  id VARCHAR(40) PRIMARY KEY,
+  name VARCHAR(64) NOT NULL,
+  color SMALLINT NOT NULL CHECK (color BETWEEN 1 AND 4),
+  rarity VARCHAR(16) NOT NULL,
+  energy_cost INT NOT NULL,
+  effect_type VARCHAR(32) NOT NULL,
+  description TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS player_abilities (
+  user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ability_id VARCHAR(40) NOT NULL REFERENCES abilities(id) ON DELETE CASCADE,
+  level SMALLINT NOT NULL DEFAULT 1 CHECK (level BETWEEN 1 AND 5),
+  copies INT NOT NULL DEFAULT 1 CHECK (copies >= 1),
+  PRIMARY KEY (user_id, ability_id)
+);
+
+CREATE TABLE IF NOT EXISTS player_loadouts (
+  user_id VARCHAR(64) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  slot_0 VARCHAR(40) REFERENCES abilities(id),
+  slot_1 VARCHAR(40) REFERENCES abilities(id),
+  slot_2 VARCHAR(40) REFERENCES abilities(id),
+  slot_3 VARCHAR(40) REFERENCES abilities(id)
+);
+
+CREATE TABLE IF NOT EXISTS chests (
+  id VARCHAR(24) PRIMARY KEY,
+  name VARCHAR(64) NOT NULL,
+  price INT NOT NULL CHECK (price > 0)
+);
+
+CREATE TABLE IF NOT EXISTS chest_rewards (
+  request_id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chest_id VARCHAR(24) NOT NULL REFERENCES chests(id),
+  ability_id VARCHAR(40) NOT NULL REFERENCES abilities(id),
+  rarity VARCHAR(16) NOT NULL,
+  is_new BOOLEAN NOT NULL,
+  new_level SMALLINT NOT NULL,
+  refund_coins INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS transactions (
+  id BIGSERIAL PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount INT NOT NULL,
+  reason VARCHAR(64) NOT NULL,
+  reference_id VARCHAR(64),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

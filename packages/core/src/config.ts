@@ -1,5 +1,41 @@
 export type AbilityRarity = 'common' | 'rare' | 'epic' | 'legendary';
-export type AbilityEffectType = 'heal' | 'freeze' | 'destroy_cell' | 'joker';
+export type AbilityEffectType =
+  | 'heal'
+  | 'mega_heal'
+  | 'wave_shield'
+  | 'vampire'
+  | 'freeze'
+  | 'deep_freeze'
+  | 'force_drop'
+  | 'cryo_storm'
+  | 'destroy_cell'
+  | 'carpet_strike'
+  | 'laser_row'
+  | 'armageddon'
+  | 'joker'
+  | 'joker_rain'
+  | 'alchemy'
+  | 'energy_surge';
+
+export type ChestTier = 'wooden' | 'silver' | 'gold' | 'legendary';
+
+export interface ChestDefinition {
+  id: ChestTier;
+  name: string;
+  price: number;
+  weights: Record<AbilityRarity, number>;
+}
+
+export interface EconomyConfig {
+  startingCoins: number;
+  pvpWinCoins: number;
+  botWinCoins: number;
+  participationCoins: number;
+  maxAbilityLevel: number;
+  levelBonusPerStep: number;
+  maxLevelDuplicateRefundRatio: number;
+  chests: Record<ChestTier, ChestDefinition>;
+}
 
 export interface AbilityDefinition {
   id: string;
@@ -66,8 +102,10 @@ export interface GameConfig {
   autoColorEffects: boolean;
   /** Четыре слота способностей по умолчанию (Фаза 1Б) */
   defaultLoadout: [string | null, string | null, string | null, string | null];
-  /** Реестр доступных способностей (Фаза 1Б) */
+  /** Реестр доступных способностей (Фаза 1Б / Фаза 2) */
   abilities: Record<string, AbilityDefinition>;
+  /** Настройки экономики, монет и сундуков (Фаза 2) */
+  economy: EconomyConfig;
   /** Частота тика сервера в Гц (4) */
   serverTickHz: number;
   /** Частота отправки снапшотов в Гц (4) */
@@ -131,17 +169,53 @@ export const DEFAULT_CONFIG: GameConfig = {
   autoColorEffects: false,
   defaultLoadout: ['heal', 'freeze', 'destroy_cell', 'joker'],
   abilities: {
+    // 🟩 ЗЕЛЁНЫЕ (Выживание, Щит, Вампиризм)
     heal: {
       id: 'heal',
       name: 'Лечение',
       color: 1,
       rarity: 'common',
       energyCost: 15,
-      description: 'Восстанавливает 15 HP (работает даже в заморозке)',
+      description: 'Восстанавливает 15 HP (работает в заморозке)',
       effectType: 'heal',
       allowWhenFrozen: true,
       params: { amount: 15 },
     },
+    mega_heal: {
+      id: 'mega_heal',
+      name: 'Мега-лечение',
+      color: 1,
+      rarity: 'rare',
+      energyCost: 26,
+      description: 'Восстанавливает 28 HP (работает в заморозке)',
+      effectType: 'mega_heal',
+      allowWhenFrozen: true,
+      params: { amount: 28 },
+    },
+    wave_shield: {
+      id: 'wave_shield',
+      name: 'Щит волн',
+      color: 1,
+      rarity: 'epic',
+      energyCost: 24,
+      description: 'Гасит все летящие в тебя волны соперника и лечит 12 HP',
+      effectType: 'wave_shield',
+      allowWhenFrozen: true,
+      params: { amount: 12 },
+    },
+    vampire: {
+      id: 'vampire',
+      name: 'Вампиризм',
+      color: 1,
+      rarity: 'legendary',
+      energyCost: 32,
+      description: 'Похищает 16 HP у соперника и передаёт тебе',
+      effectType: 'vampire',
+      allowWhenFrozen: true,
+      params: { amount: 16 },
+    },
+
+    // 🟦 СИНИЕ (Контроль, Саботаж)
     freeze: {
       id: 'freeze',
       name: 'Заморозка',
@@ -153,6 +227,41 @@ export const DEFAULT_CONFIG: GameConfig = {
       allowWhenFrozen: false,
       params: { duration: 2.5 },
     },
+    deep_freeze: {
+      id: 'deep_freeze',
+      name: 'Глубокий лёд',
+      color: 2,
+      rarity: 'rare',
+      energyCost: 30,
+      description: 'Замораживает управление соперника на 4.2 сек',
+      effectType: 'deep_freeze',
+      allowWhenFrozen: false,
+      params: { duration: 4.2 },
+    },
+    force_drop: {
+      id: 'force_drop',
+      name: 'Грави-удар',
+      color: 2,
+      rarity: 'epic',
+      energyCost: 24,
+      description: 'Мгновенно обрушивает фигуру соперника вниз и морозит на 1.5 сек',
+      effectType: 'force_drop',
+      allowWhenFrozen: false,
+      params: { duration: 1.5 },
+    },
+    cryo_storm: {
+      id: 'cryo_storm',
+      name: 'Крио-шторм',
+      color: 2,
+      rarity: 'legendary',
+      energyCost: 34,
+      description: 'Морозит соперника на 3.2 сек и сжигает по 12 энергии каждого цвета',
+      effectType: 'cryo_storm',
+      allowWhenFrozen: false,
+      params: { duration: 3.2, drain: 12 },
+    },
+
+    // 🟥 КРАСНЫЕ (Разрушение, Атака)
     destroy_cell: {
       id: 'destroy_cell',
       name: 'Метеоры',
@@ -164,6 +273,41 @@ export const DEFAULT_CONFIG: GameConfig = {
       allowWhenFrozen: false,
       params: { count: 5 },
     },
+    carpet_strike: {
+      id: 'carpet_strike',
+      name: 'Ковровый удар',
+      color: 3,
+      rarity: 'rare',
+      energyCost: 27,
+      description: 'Уничтожает 10 случайных кубиков соперника',
+      effectType: 'carpet_strike',
+      allowWhenFrozen: false,
+      params: { count: 10 },
+    },
+    laser_row: {
+      id: 'laser_row',
+      name: 'Лазерный срез',
+      color: 3,
+      rarity: 'epic',
+      energyCost: 28,
+      description: 'Стирает 2 самые заполненные строки соперника и наносит 8 урона',
+      effectType: 'laser_row',
+      allowWhenFrozen: false,
+      params: { rows: 2, damage: 8 },
+    },
+    armageddon: {
+      id: 'armageddon',
+      name: 'Армагеддон',
+      color: 3,
+      rarity: 'legendary',
+      energyCost: 35,
+      description: 'Выпускает ударную волну ×3 и уничтожает 8 кубиков соперника',
+      effectType: 'armageddon',
+      allowWhenFrozen: false,
+      params: { wavePow: 3, count: 8 },
+    },
+
+    // 🟨 ЖЁЛТЫЕ (Спецфигуры, Энергия, Алхимия)
     joker: {
       id: 'joker',
       name: 'Джокеры',
@@ -174,6 +318,74 @@ export const DEFAULT_CONFIG: GameConfig = {
       effectType: 'joker',
       allowWhenFrozen: false,
       params: { count: 2 },
+    },
+    joker_rain: {
+      id: 'joker_rain',
+      name: 'Дождь джокеров',
+      color: 4,
+      rarity: 'rare',
+      energyCost: 25,
+      description: 'Даёт 4 проникающих джокера 1×1 подряд',
+      effectType: 'joker_rain',
+      allowWhenFrozen: false,
+      params: { count: 4 },
+    },
+    alchemy: {
+      id: 'alchemy',
+      name: 'Алхимия',
+      color: 4,
+      rarity: 'epic',
+      energyCost: 24,
+      description: 'Заполняет нижний ряд до 15/16 клеток под взрыв и даёт 1 джокер',
+      effectType: 'alchemy',
+      allowWhenFrozen: false,
+      params: { jokers: 1 },
+    },
+    energy_surge: {
+      id: 'energy_surge',
+      name: 'Энерго-шторм',
+      color: 4,
+      rarity: 'legendary',
+      energyCost: 28,
+      description: 'Даёт 2 джокера 1×1 и заливает +14 энергии во все остальные баки',
+      effectType: 'energy_surge',
+      allowWhenFrozen: false,
+      params: { jokers: 2, boost: 14 },
+    },
+  },
+  economy: {
+    startingCoins: 300,
+    pvpWinCoins: 60,
+    botWinCoins: 30,
+    participationCoins: 15,
+    maxAbilityLevel: 5,
+    levelBonusPerStep: 0.1,
+    maxLevelDuplicateRefundRatio: 0.5,
+    chests: {
+      wooden: {
+        id: 'wooden',
+        name: 'Деревянный сундук',
+        price: 50,
+        weights: { common: 75, rare: 20, epic: 4.5, legendary: 0.5 },
+      },
+      silver: {
+        id: 'silver',
+        name: 'Серебряный сундук',
+        price: 200,
+        weights: { common: 40, rare: 42, epic: 15, legendary: 3 },
+      },
+      gold: {
+        id: 'gold',
+        name: 'Золотой сундук',
+        price: 500,
+        weights: { common: 10, rare: 45, epic: 35, legendary: 10 },
+      },
+      legendary: {
+        id: 'legendary',
+        name: 'Легендарный сундук',
+        price: 1000,
+        weights: { common: 0, rare: 15, epic: 45, legendary: 40 },
+      },
     },
   },
   serverTickHz: 30,

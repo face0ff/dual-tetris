@@ -164,7 +164,11 @@ export function spawnPiece(state: MatchState, playerIndex: 0 | 1): void {
   }
 }
 
-export function createMatch(seed: number, config: GameConfig = DEFAULT_CONFIG): MatchState {
+export function createMatch(
+  seed: number,
+  config: GameConfig = DEFAULT_CONFIG,
+  playerLoadouts?: [AbilitySlots?, AbilitySlots?]
+): MatchState {
   const createPlayer = (index: 0 | 1): PlayerState => {
     const rng = new SeededRng(seed + index * 100003);
     const bag: number[] = [];
@@ -172,6 +176,18 @@ export function createMatch(seed: number, config: GameConfig = DEFAULT_CONFIG): 
     const first = drawNextPiece(temp);
     const second = drawNextPiece(temp);
     const spawnX = Math.floor((config.boardWidth - first.m[0].length) / 2);
+    const customSlots = playerLoadouts?.[index];
+    const abilities: AbilitySlots = customSlots
+      ? (customSlots.map((s) => ({
+          abilityId: s.abilityId ?? null,
+          level: s.level ?? 1,
+        })) as AbilitySlots)
+      : [
+          { abilityId: config.defaultLoadout[0] ?? null, level: 1 },
+          { abilityId: config.defaultLoadout[1] ?? null, level: 1 },
+          { abilityId: config.defaultLoadout[2] ?? null, level: 1 },
+          { abilityId: config.defaultLoadout[3] ?? null, level: 1 },
+        ];
     return {
       index,
       board: createEmptyBoard(config.boardWidth, config.boardHeight),
@@ -194,12 +210,7 @@ export function createMatch(seed: number, config: GameConfig = DEFAULT_CONFIG): 
         red: 0,
         yellow: 0,
       },
-      abilities: [
-        { abilityId: config.defaultLoadout[0] ?? null },
-        { abilityId: config.defaultLoadout[1] ?? null },
-        { abilityId: config.defaultLoadout[2] ?? null },
-        { abilityId: config.defaultLoadout[3] ?? null },
-      ],
+      abilities,
       processedAbilityRequests: new Set<string>(),
       rng,
       ackSeq: 0,
@@ -621,19 +632,164 @@ export function activateAbility(
     energySpent: def.energyCost,
   });
 
+  // Масштабирование параметров по уровню способности (Ур. 1..5 -> +10% за каждый уровень выше 1)
+  const level = Math.max(1, Math.min(state.config.economy?.maxAbilityLevel ?? 5, slot.level ?? 1));
+  const bonusStep = state.config.economy?.levelBonusPerStep ?? 0.1;
+  const mult = 1 + (level - 1) * bonusStep;
+  const scaledParams: Record<string, number> = {};
+  for (const [k, v] of Object.entries(def.params)) {
+    scaledParams[k] = k === 'duration' ? Number((v * mult).toFixed(2)) : Math.round(v * mult);
+  }
+
+  const targetIndex: 0 | 1 = playerIndex === 0 ? 1 : 0;
+  const target = state.players[targetIndex];
+
   switch (def.effectType) {
     case 'heal':
-      applyHealAbility(state, playerIndex, def.params);
+    case 'mega_heal':
+      applyHealAbility(state, playerIndex, scaledParams);
       break;
+    case 'wave_shield': {
+      // Гасит все летящие в игрока волны соперника и лечит
+      state.waves = state.waves.filter((w) => w.owner === playerIndex);
+      applyHealAbility(state, playerIndex, scaledParams);
+      break;
+    }
+    case 'vampire': {
+      const dmg = Math.max(1, scaledParams.amount ?? 16);
+      target.hp -= dmg;
+      state.events.push({
+        type: 'impact',
+        target: targetIndex,
+        attacker: playerIndex,
+        damage: dmg,
+        rowsCleared: [],
+        color: 1,
+      });
+      applyHealAbility(state, playerIndex, { amount: dmg });
+      checkVictory(state);
+      break;
+    }
     case 'freeze':
-      applyFreezeAbility(state, playerIndex, def.params);
+    case 'deep_freeze':
+      applyFreezeAbility(state, playerIndex, scaledParams);
       break;
+    case 'force_drop': {
+      // Мгновенно роняет активную фигуру соперника вниз и замораживает
+      const isTargetJoker = target.cur.c === 5;
+      while (
+        fits(
+          target.board,
+          target.cur.m,
+          target.cur.x,
+          target.cur.y + 1,
+          state.config.boardWidth,
+          state.config.boardHeight,
+          isTargetJoker
+        )
+      ) {
+        target.cur.y += 1;
+      }
+      lockPiece(state, targetIndex);
+      applyFreezeAbility(state, playerIndex, scaledParams);
+      checkVictory(state);
+      break;
+    }
+    case 'cryo_storm': {
+      applyFreezeAbility(state, playerIndex, scaledParams);
+      const drain = Math.max(1, scaledParams.drain ?? 12);
+      target.energy.green = Math.max(0, target.energy.green - drain);
+      target.energy.blue = Math.max(0, target.energy.blue - drain);
+      target.energy.red = Math.max(0, target.energy.red - drain);
+      target.energy.yellow = Math.max(0, target.energy.yellow - drain);
+      break;
+    }
     case 'destroy_cell':
-      applyDestroyCellAbility(state, playerIndex, def.params);
+    case 'carpet_strike':
+      applyDestroyCellAbility(state, playerIndex, scaledParams);
       break;
+    case 'laser_row': {
+      const rowsCount = Math.max(1, scaledParams.rows ?? 2);
+      const dmg = Math.max(1, scaledParams.damage ?? 8);
+      target.hp -= dmg;
+      const candidateRows = target.board
+        .map((row, idx) => ({
+          idx,
+          occupied: row.reduce((sum, v) => sum + (v !== 0 ? 1 : 0), 0),
+        }))
+        .filter((r) => r.occupied > 0)
+        .sort((a, b) => b.occupied - a.occupied || a.idx - b.idx)
+        .slice(0, rowsCount);
+      const rowsCleared: number[] = [];
+      for (const r of candidateRows) {
+        target.board[r.idx].fill(0);
+        rowsCleared.push(r.idx);
+      }
+      state.events.push({
+        type: 'impact',
+        target: targetIndex,
+        attacker: playerIndex,
+        damage: dmg,
+        rowsCleared,
+        color: 3,
+      });
+      checkVictory(state);
+      break;
+    }
+    case 'armageddon': {
+      const wavePow = Math.max(1, scaledParams.wavePow ?? 3);
+      const startU = playerIndex === 0 ? -0.5 : state.config.gapCells + 0.5;
+      const waveId = state.nextWaveId++;
+      state.waves.push({
+        id: waveId,
+        owner: playerIndex,
+        u: startU,
+        pow: wavePow,
+        dpp: state.config.baseDamagePerPower,
+        col: 3,
+      });
+      state.events.push({
+        type: 'wave_spawn',
+        player: playerIndex,
+        waveId,
+        pow: wavePow,
+        color: 3,
+        row: 0,
+      });
+      applyDestroyCellAbility(state, playerIndex, { count: scaledParams.count ?? 8 });
+      break;
+    }
     case 'joker':
-      applyJokerAbility(state, playerIndex, def.params);
+    case 'joker_rain':
+      applyJokerAbility(state, playerIndex, scaledParams);
       break;
+    case 'alchemy': {
+      // Находит самую нижнюю непустую строку игрока и заполняет её до W-1 клеток
+      const W = state.config.boardWidth;
+      const H = state.config.boardHeight;
+      for (let r = H - 1; r >= 0; r--) {
+        if (p.board[r].some((v) => v !== 0)) {
+          for (let c = 0; c < W - 1; c++) {
+            if (p.board[r][c] === 0) {
+              p.board[r][c] = 4;
+            }
+          }
+          p.board[r][W - 1] = 0;
+          break;
+        }
+      }
+      applyJokerAbility(state, playerIndex, { count: scaledParams.jokers ?? 1 });
+      break;
+    }
+    case 'energy_surge': {
+      const boost = Math.max(1, scaledParams.boost ?? 14);
+      const maxE = state.config.energyMax;
+      p.energy.green = Math.min(maxE, p.energy.green + boost);
+      p.energy.blue = Math.min(maxE, p.energy.blue + boost);
+      p.energy.red = Math.min(maxE, p.energy.red + boost);
+      applyJokerAbility(state, playerIndex, { count: scaledParams.jokers ?? 2 });
+      break;
+    }
   }
 
   return { ok: true, ability: def };

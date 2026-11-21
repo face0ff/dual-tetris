@@ -4,9 +4,10 @@ import { createDualTetrisServer, getLanAddresses } from './server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const staticDir = path.resolve(__dirname, '../../web/dist');
+const storeFilePath = path.resolve(__dirname, '../../../data/profiles.json');
 const port = Number(process.env.PORT ?? 3000);
 
-const server = createDualTetrisServer({}, staticDir);
+const server = createDualTetrisServer({}, staticDir, storeFilePath);
 
 server.listen(port, '0.0.0.0').then((actualPort) => {
   console.log(`==================================================`);

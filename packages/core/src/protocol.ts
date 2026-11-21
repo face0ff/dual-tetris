@@ -1,22 +1,46 @@
 import { z } from 'zod';
-import type { GameConfig } from './config.js';
+import type { AbilityRarity, ChestTier, GameConfig } from './config.js';
 
 export const PROTOCOL_VERSION = 1;
 
 export const InputActionSchema = z.enum(['L', 'R', 'ROT', 'SD', 'HD']);
 export type InputAction = z.infer<typeof InputActionSchema>;
 
+export const ChestTierSchema = z.enum(['wooden', 'silver', 'gold', 'legendary']);
+
 export const ClientMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('auth_profile'),
+    playerId: z.string().min(1).max(64).optional(),
+    name: z.string().max(24).optional(),
+    avatar: z.string().max(16).optional(),
+  }),
+  z.object({
+    type: z.literal('equip_loadout'),
+    loadout: z.tuple([
+      z.string().max(40).nullable(),
+      z.string().max(40).nullable(),
+      z.string().max(40).nullable(),
+      z.string().max(40).nullable(),
+    ]),
+  }),
+  z.object({
+    type: z.literal('open_chest'),
+    chestId: ChestTierSchema,
+    requestId: z.string().min(1).max(64),
+  }),
   z.object({
     type: z.literal('create_room'),
     name: z.string().max(24).optional(),
     sessionToken: z.string().max(64).optional(),
+    playerId: z.string().max(64).optional(),
   }),
   z.object({
     type: z.literal('join_room'),
     code: z.string().min(1).max(12),
     name: z.string().max(24).optional(),
     sessionToken: z.string().max(64).optional(),
+    playerId: z.string().max(64).optional(),
   }),
   z.object({
     type: z.literal('ready'),
@@ -40,6 +64,7 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('start_bot_match'),
     name: z.string().max(24).optional(),
+    playerId: z.string().max(64).optional(),
   }),
   z.object({
     type: z.literal('activate_ability'),
@@ -82,9 +107,45 @@ export interface EnergyState {
 
 export interface AbilitySlot {
   abilityId: string | null;
+  level?: number;
 }
 
 export type AbilitySlots = [AbilitySlot, AbilitySlot, AbilitySlot, AbilitySlot];
+
+export interface OwnedAbility {
+  abilityId: string;
+  level: number;
+  copies: number;
+}
+
+export interface PlayerStats {
+  wins: number;
+  losses: number;
+  draws: number;
+  matches: number;
+}
+
+export interface PlayerProfileData {
+  playerId: string;
+  name: string;
+  avatar: string;
+  coins: number;
+  ownedAbilities: Record<string, OwnedAbility>;
+  loadout: [string | null, string | null, string | null, string | null];
+  stats: PlayerStats;
+}
+
+export interface ChestRewardResult {
+  requestId: string;
+  chestId: ChestTier;
+  abilityId: string;
+  rarity: AbilityRarity;
+  isNew: boolean;
+  newLevel: number;
+  copies: number;
+  refundCoins: number;
+  coinsRemaining: number;
+}
 
 export type AbilityErrorCode =
   | 'ABILITY_NOT_FOUND'
@@ -177,6 +238,16 @@ export type ServerMessage =
       winner: 0 | 1 | null;
       reason: 'ko' | 'forfeit' | 'draw';
       hp: [number, number];
+      coinsEarned?: [number, number];
+    }
+  | {
+      type: 'profile';
+      profile: PlayerProfileData;
+    }
+  | {
+      type: 'chest_opened';
+      reward: ChestRewardResult;
+      profile: PlayerProfileData;
     }
   | {
       type: 'pong';

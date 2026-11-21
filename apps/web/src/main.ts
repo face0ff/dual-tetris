@@ -6,11 +6,14 @@ import {
   getLowestEmptyRow,
   rotateMatrixCW,
   type ActivePiece,
+  type ChestRewardResult,
+  type ChestTier,
   type ClientMessage,
   type GameConfig,
   type GameEvent,
   type InputAction,
   type PieceShape,
+  type PlayerProfileData,
   type RoomPlayerInfo,
   type RoomState,
   type ServerMessage,
@@ -120,9 +123,27 @@ const btnLeaveLobby = document.getElementById('btn-leave-lobby') as HTMLButtonEl
 
 const resultTitleEl = document.getElementById('result-title')!;
 const resultSubtitleEl = document.getElementById('result-subtitle')!;
+const resultCoinsEarnedEl = document.getElementById('result-coins-earned')!;
 const resultRematchStatusEl = document.getElementById('result-rematch-status')!;
 const btnRematch = document.getElementById('btn-rematch') as HTMLButtonElement;
 const btnResultMenu = document.getElementById('btn-result-menu') as HTMLButtonElement;
+
+const btnAvatar = document.getElementById('btn-avatar') as HTMLButtonElement;
+const profileStatsText = document.getElementById('profile-stats-text')!;
+const profileCoinsEl = document.getElementById('profile-coins')!;
+const btnOpenInventory = document.getElementById('btn-open-inventory') as HTMLButtonElement;
+const btnOpenChests = document.getElementById('btn-open-chests') as HTMLButtonElement;
+
+const screenInventory = document.getElementById('screen-inventory')!;
+const btnCloseInventory = document.getElementById('btn-close-inventory') as HTMLButtonElement;
+const inventoryLoadoutSlotsEl = document.getElementById('inventory-loadout-slots')!;
+const inventoryCountEl = document.getElementById('inventory-count')!;
+const inventoryListEl = document.getElementById('inventory-list')!;
+
+const screenChests = document.getElementById('screen-chests')!;
+const btnCloseChests = document.getElementById('btn-close-chests') as HTMLButtonElement;
+const chestsCoinsEl = document.getElementById('chests-coins')!;
+const chestRewardBoxEl = document.getElementById('chest-reward-box')!;
 
 const pingBadge = document.getElementById('ping-badge')!;
 const btnSound = document.getElementById('btn-sound') as HTMLButtonElement;
@@ -154,9 +175,42 @@ let meteorFlashes: [MeteorFlash[], MeteorFlash[]] = [[], []];
 let sparks: SparkFx[] = [];
 let msgs: LogMsg[] = [];
 
-// Загрузка сохранённого имени и звука
+// Загрузка сохранённого профиля, имени и звука
+const AVATARS = ['👾', '🔥', '⚡', '👑', '🐉', '🦊', '🤖', '💎'];
+let myPlayerId = localStorage.getItem('dual_tetris_player_id') ?? '';
+if (!myPlayerId) {
+  myPlayerId = `p_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+  localStorage.setItem('dual_tetris_player_id', myPlayerId);
+}
+let myAvatar = localStorage.getItem('dual_tetris_avatar') ?? '👾';
+let myProfile: PlayerProfileData | null = null;
+let selectedLoadoutSlotIdx = 0;
+
+btnAvatar.textContent = myAvatar;
 inputName.value = localStorage.getItem('dual_tetris_name') ?? '';
 btnSound.textContent = sfx.enabled ? '🔊' : '🔇';
+
+btnAvatar.addEventListener('click', () => {
+  const nextIdx = (AVATARS.indexOf(myAvatar) + 1) % AVATARS.length;
+  myAvatar = AVATARS[nextIdx];
+  localStorage.setItem('dual_tetris_avatar', myAvatar);
+  btnAvatar.textContent = myAvatar;
+  sendMsg({
+    type: 'auth_profile',
+    playerId: myPlayerId,
+    name: savePlayerName(),
+    avatar: myAvatar,
+  });
+});
+
+inputName.addEventListener('change', () => {
+  sendMsg({
+    type: 'auth_profile',
+    playerId: myPlayerId,
+    name: savePlayerName(),
+    avatar: myAvatar,
+  });
+});
 
 btnSound.addEventListener('click', () => {
   const on = sfx.toggle();
@@ -219,6 +273,146 @@ function sendMsg(msg: ClientMessage): void {
     ws.send(JSON.stringify(msg));
   }
 }
+
+function renderProfileUI(): void {
+  if (!myProfile) return;
+  const totalAbilities = Object.keys(config.abilities).length;
+  const ownedCount = Object.keys(myProfile.ownedAbilities).length;
+  btnAvatar.textContent = myProfile.avatar || myAvatar;
+  profileCoinsEl.textContent = `🪙 ${myProfile.coins}`;
+  chestsCoinsEl.textContent = `🪙 ${myProfile.coins}`;
+  profileStatsText.textContent = `🏆 ${myProfile.stats.wins} побед • ${myProfile.stats.matches} боёв`;
+  btnOpenInventory.textContent = `🎒 Колода (${ownedCount}/${totalAbilities})`;
+  inventoryCountEl.textContent = `${ownedCount}/${totalAbilities}`;
+
+  // Отрисовка 4 слотов колоды в модалке инвентаря
+  inventoryLoadoutSlotsEl.innerHTML = '';
+  for (let i = 0; i < 4; i++) {
+    const abId = myProfile.loadout[i];
+    const def = abId ? config.abilities[abId] : null;
+    const owned = abId ? myProfile.ownedAbilities[abId] : null;
+    const chip = document.createElement('div');
+    chip.className = `slot-chip${selectedLoadoutSlotIdx === i ? ' active-slot' : ''}`;
+    if (def) {
+      chip.style.borderColor = selectedLoadoutSlotIdx === i ? '#38bdf8' : COL[def.color];
+      chip.innerHTML = `<div style="color:${COL[def.color]}">[${i + 1}] ${def.name}</div><div style="font-size:10px;color:#94a3b8">Ур.${owned?.level ?? 1} • ${def.energyCost} эн.</div>`;
+    } else {
+      chip.innerHTML = `<div>[${i + 1}] Пусто</div>`;
+    }
+    chip.addEventListener('click', () => {
+      selectedLoadoutSlotIdx = i;
+      renderProfileUI();
+    });
+    inventoryLoadoutSlotsEl.append(chip);
+  }
+
+  // Отрисовка списка всех 16 способностей
+  inventoryListEl.innerHTML = '';
+  const allDefs = Object.values(config.abilities);
+  const rarityLabels: Record<string, string> = {
+    common: 'Обычная',
+    rare: 'Редкая',
+    epic: 'Эпическая',
+    legendary: 'Легендарная',
+  };
+
+  for (const def of allDefs) {
+    const owned = myProfile.ownedAbilities[def.id];
+    const isEquipped = myProfile.loadout.includes(def.id);
+    const item = document.createElement('div');
+    item.className = `ability-item${owned ? '' : ' locked'}`;
+    item.style.borderLeft = `4px solid ${COL[def.color]}`;
+
+    const infoDiv = document.createElement('div');
+    infoDiv.style.flex = '1';
+    infoDiv.innerHTML = `
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <strong style="font-size:13.5px;color:${COL[def.color]}">${def.name}</strong>
+        <span class="rarity-tag rarity-${def.rarity}">${rarityLabels[def.rarity] ?? def.rarity}</span>
+        ${owned ? `<span style="font-size:11px;color:#fde047;font-weight:700">Ур.${owned.level}</span>` : '<span style="font-size:11px;color:#64748b">🔒 В сундуках</span>'}
+        <span style="font-size:11px;color:#94a3b8">⚡ ${def.energyCost}</span>
+      </div>
+      <div style="font-size:11.5px;color:#cbd5e1;margin-top:3px">${def.description}</div>
+    `;
+
+    item.append(infoDiv);
+
+    if (owned) {
+      const btn = document.createElement('button');
+      btn.className = isEquipped ? 'btn btn-secondary' : 'btn btn-blue';
+      btn.style.padding = '7px 10px';
+      btn.style.fontSize = '12px';
+      btn.textContent = isEquipped ? `Слот ${myProfile.loadout.indexOf(def.id) + 1}` : `В слот ${selectedLoadoutSlotIdx + 1}`;
+      btn.addEventListener('click', () => {
+        if (!myProfile) return;
+        const nextLoadout = [...myProfile.loadout] as [
+          string | null,
+          string | null,
+          string | null,
+          string | null,
+        ];
+        // Если уже стоит в другом слоте — меняем местами
+        const existingIdx = nextLoadout.indexOf(def.id);
+        if (existingIdx !== -1 && existingIdx !== selectedLoadoutSlotIdx) {
+          nextLoadout[existingIdx] = nextLoadout[selectedLoadoutSlotIdx];
+        }
+        nextLoadout[selectedLoadoutSlotIdx] = def.id;
+        sendMsg({ type: 'equip_loadout', loadout: nextLoadout });
+      });
+      item.append(btn);
+    }
+
+    inventoryListEl.append(item);
+  }
+}
+
+function showChestReward(reward: ChestRewardResult): void {
+  const def = config.abilities[reward.abilityId];
+  const name = def ? def.name : reward.abilityId;
+  const col = def ? COL[def.color] : '#38bdf8';
+  chestRewardBoxEl.classList.remove('hidden');
+  chestRewardBoxEl.innerHTML = `
+    <div style="font-size:12px;font-weight:800;color:#fde047">
+      ${reward.isNew ? '✨ НОВАЯ СПОСОБНОСТЬ ОТКРЫТА!' : `⬆️ ДУБЛИКАТ: УРОВЕНЬ ПОВЫШЕН ДО ${reward.newLevel}!`}
+    </div>
+    <div style="font-size:19px;font-weight:900;color:${col};margin:4px 0">${name}</div>
+    <div style="font-size:12px;color:#cbd5e1">${def?.description ?? ''}</div>
+    ${reward.refundCoins > 0 ? `<div style="font-size:12px;color:#4ade80;margin-top:4px">Макс. уровень! Возврат: +${reward.refundCoins} 🪙</div>` : ''}
+  `;
+  sfx.lineClear(2);
+}
+
+btnOpenInventory.addEventListener('click', () => {
+  renderProfileUI();
+  screenInventory.classList.remove('hidden');
+});
+btnCloseInventory.addEventListener('click', () => {
+  screenInventory.classList.add('hidden');
+});
+
+btnOpenChests.addEventListener('click', () => {
+  chestRewardBoxEl.classList.add('hidden');
+  renderProfileUI();
+  screenChests.classList.remove('hidden');
+});
+btnCloseChests.addEventListener('click', () => {
+  screenChests.classList.add('hidden');
+});
+
+let chestReqSeq = 1;
+document.querySelectorAll<HTMLButtonElement>('.btn-buy-chest').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const chestId = btn.dataset.chest as ChestTier;
+    if (!chestId) return;
+    connectWebSocket(() => {
+      sendMsg({
+        type: 'open_chest',
+        chestId,
+        requestId: `ch_${myPlayerId}_${Date.now()}_${chestReqSeq++}`,
+      });
+    });
+  });
+});
 
 function updateScreens(): void {
   screenHome.classList.toggle('hidden', roomState !== 'home');
@@ -511,6 +705,12 @@ function connectWebSocket(onOpen?: () => void): void {
 
   ws.addEventListener('open', () => {
     sendMsg({ type: 'ping', t: performance.now() });
+    sendMsg({
+      type: 'auth_profile',
+      playerId: myPlayerId,
+      name: savePlayerName(),
+      avatar: myAvatar,
+    });
     if (onOpen) {
       onOpen();
       return;
@@ -545,7 +745,27 @@ function connectWebSocket(onOpen?: () => void): void {
       return;
     }
 
+    if (msg.type === 'profile') {
+      myProfile = msg.profile;
+      myPlayerId = msg.profile.playerId;
+      localStorage.setItem('dual_tetris_player_id', myPlayerId);
+      renderProfileUI();
+      return;
+    }
+
+    if (msg.type === 'chest_opened') {
+      myProfile = msg.profile;
+      renderProfileUI();
+      showChestReward(msg.reward);
+      return;
+    }
+
     if (msg.type === 'error') {
+      if (msg.code === 'NOT_ENOUGH_COINS') {
+        chestRewardBoxEl.classList.remove('hidden');
+        chestRewardBoxEl.innerHTML = `<div style="color:#fda4af;font-weight:700">Недостаточно монет 🪙! Побеждай в матчах, чтобы заработать монеты.</div>`;
+        return;
+      }
       if (msg.code === 'ROOM_NOT_FOUND') {
         clearActiveRoom();
         if (window.location.pathname.startsWith('/r/')) {
@@ -648,6 +868,9 @@ function connectWebSocket(onOpen?: () => void): void {
       roomState = 'finished';
       updateScreens();
 
+      const earned = msg.coinsEarned?.[youIndex] ?? 0;
+      resultCoinsEarnedEl.textContent = earned > 0 ? `+${earned} 🪙 Монет!` : '';
+
       if (msg.winner === null) {
         resultTitleEl.textContent = S.draw;
         resultSubtitleEl.textContent = S.reasonDraw;
@@ -676,7 +899,7 @@ function connectWebSocket(onOpen?: () => void): void {
 btnCreateRoom.addEventListener('click', () => {
   const name = savePlayerName();
   connectWebSocket(() => {
-    sendMsg({ type: 'create_room', name });
+    sendMsg({ type: 'create_room', name, playerId: myPlayerId });
   });
 });
 
@@ -693,6 +916,7 @@ btnJoinRoom.addEventListener('click', () => {
       code,
       name,
       sessionToken: getSessionToken(code),
+      playerId: myPlayerId,
     });
   });
 });
@@ -704,7 +928,7 @@ inputRoomCode.addEventListener('keydown', (e) => {
 btnBotMatch.addEventListener('click', () => {
   const name = savePlayerName();
   connectWebSocket(() => {
-    sendMsg({ type: 'start_bot_match', name });
+    sendMsg({ type: 'start_bot_match', name, playerId: myPlayerId });
   });
 });
 
@@ -1143,11 +1367,12 @@ function drawPlayerBoard(playerIndex: 0 | 1, isOpponent: boolean, barColor: stri
       g2.strokeStyle = isReady || pulse ? colHex : '#334155';
       g2.strokeRect(sx, slotY, slotW, slotH);
 
-      // Название способности и клавиша [1..4]
+      // Название способности и уровень
+      const lvl = slot?.level && slot.level > 1 ? `★${slot.level}` : '';
       g2.fillStyle = isReady ? '#ffffff' : '#94a3b8';
-      g2.font = 'bold 10.5px system-ui';
+      g2.font = 'bold 10px system-ui';
       g2.textAlign = 'left';
-      g2.fillText(`${i + 1}.${def.name}`, sx + 5, slotY + 14);
+      g2.fillText(`${i + 1}.${def.name}${lvl}`, sx + 4, slotY + 14, slotW - 8);
 
       // Текущая энергия / Стоимость
       g2.fillStyle = isReady ? colHex : '#cbd5e1';

@@ -405,4 +405,38 @@ describe('Ядро DUAL TETRIS (@dual-tetris/core)', () => {
     expect(p0.next.c).toBe(5);
     expect(p0.jokersRemaining).toBe(1);
   });
+
+  it('Фаза 2: пул из 16 способностей всех 4 редкостей и масштабирование силы от уровня прокачки (Ур. 1..5)', () => {
+    expect(Object.keys(DEFAULT_CONFIG.abilities).length).toBe(16);
+
+    // Проверим масштабирование уровня (Ур. 5 даёт +40% к базовому лечению 15 -> round(15 * 1.4) = 21 HP)
+    const state = createMatch(3030, DEFAULT_CONFIG, [
+      [
+        { abilityId: 'heal', level: 5 },
+        { abilityId: 'vampire', level: 1 },
+        { abilityId: 'cryo_storm', level: 1 },
+        { abilityId: 'energy_surge', level: 1 },
+      ],
+    ]);
+    const p0 = state.players[0];
+    const p1 = state.players[1];
+
+    p0.hp = 50;
+    p0.energy.green = 15;
+    expect(activateAbility(state, 0, 0, 'lvl5-heal').ok).toBe(true);
+    expect(p0.hp).toBe(71); // 50 + 21
+
+    // Проверим легендарный Вампиризм (слот 1: -16 HP сопернику, +16 HP себе)
+    p0.energy.green = 32;
+    expect(activateAbility(state, 0, 1, 'vamp-1').ok).toBe(true);
+    expect(p1.hp).toBe(84);
+    expect(p0.hp).toBe(87);
+
+    // Проверим легендарный Энерго-шторм (слот 3: +14 во все остальные баки и 2 джокера)
+    p0.energy.yellow = 28;
+    expect(activateAbility(state, 0, 3, 'surge-1').ok).toBe(true);
+    expect(p0.energy.green).toBe(14);
+    expect(p0.energy.blue).toBe(14);
+    expect(p0.energy.red).toBe(14);
+  });
 });

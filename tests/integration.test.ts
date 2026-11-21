@@ -294,4 +294,84 @@ describe('Интеграционные и нагрузочные тесты се
     c1Re.close();
     c2.close();
   });
+
+  it('Фаза 2 по WebSocket: профиль игрока, открытие сундуков с защитой от дублей requestId, экипировка колоды и награда монетами за матч', async () => {
+    server = createDualTetrisServer({
+      maxHp: 15,
+      overflowDamage: 15,
+    });
+    const port = await server.listen(0, '127.0.0.1');
+
+    const c1 = await TestWsClient.connect(port);
+    const c2 = await TestWsClient.connect(port);
+
+    // 1. Авторизация гостевого профиля (стартовый баланс 300 монет и 4 базовые способности)
+    c1.send({ type: 'auth_profile', playerId: 'test_husband_1', name: 'Муж', avatar: '👑' });
+    const profMsg = await c1.waitFor('profile');
+    expect(profMsg.profile.coins).toBe(300);
+    expect(Object.keys(profMsg.profile.ownedAbilities)).toEqual([
+      'heal',
+      'freeze',
+      'destroy_cell',
+      'joker',
+    ]);
+
+    // 2. Открытие деревянного сундука (50 монет) + проверка идемпотентности по requestId
+    c1.send({ type: 'open_chest', chestId: 'wooden', requestId: 'chest-req-1' });
+    c1.send({ type: 'open_chest', chestId: 'wooden', requestId: 'chest-req-1' });
+
+    const opened = await c1.waitFor('chest_opened');
+    expect(opened.profile.coins).toBe(250);
+    expect(opened.reward.coinsRemaining).toBe(250);
+    expect(opened.profile.ownedAbilities[opened.reward.abilityId]).toBeDefined();
+
+    // 3. Экипировка выпавшей способности в слот 0
+    const newLoadout: [string | null, string | null, string | null, string | null] = [
+      opened.reward.abilityId,
+      'freeze',
+      'destroy_cell',
+      'joker',
+    ];
+    c1.messages.length = 0;
+    c1.send({ type: 'equip_loadout', loadout: newLoadout });
+    const updatedProf = await c1.waitFor('profile');
+    expect(updatedProf.profile.loadout[0]).toBe(opened.reward.abilityId);
+
+    // 4. Попытка экипировать несуществующую/закрытую способность отклоняется
+    c1.send({
+      type: 'equip_loadout',
+      loadout: ['non_existent_ability', 'freeze', 'destroy_cell', 'joker'],
+    });
+    const equipErr = await c1.waitFor('error', (e) => e.code === 'ABILITY_NOT_OWNED');
+    expect(equipErr.code).toBe('ABILITY_NOT_OWNED');
+
+    // 5. Проведение PvP-матча и проверка начисления монет (+60 победителю, +15 проигравшему)
+    c2.send({ type: 'auth_profile', playerId: 'test_wife_1', name: 'Жена', avatar: '🦊' });
+    await c2.waitFor('profile');
+
+    c1.send({ type: 'create_room', name: 'Муж', playerId: 'test_husband_1' });
+    const roomCreated = await c1.waitFor('room');
+    c2.send({ type: 'join_room', code: roomCreated.code, name: 'Жена', playerId: 'test_wife_1' });
+    await c2.waitFor('room', (r) => r.players.length === 2);
+
+    c1.send({ type: 'ready', value: true });
+    c2.send({ type: 'ready', value: true });
+
+    await c1.waitFor('match_start', undefined, 6000);
+    await c2.waitFor('match_start', undefined, 6000);
+
+    // Игрок 2 переполняет поле -> Игрок 1 побеждает
+    for (let seq = 1; seq <= 20; seq++) {
+      c2.send({ type: 'input', seq, a: 'HD' });
+    }
+
+    const end1 = await c1.waitFor('match_end', undefined, 5000);
+    expect(end1.winner).toBe(0);
+    expect(end1.coinsEarned).toEqual([60, 15]);
+    expect(server.store.getOrCreateProfile('test_husband_1').coins).toBe(250 + 60);
+    expect(server.store.getOrCreateProfile('test_wife_1').coins).toBe(300 + 15);
+
+    c1.close();
+    c2.close();
+  });
 });
