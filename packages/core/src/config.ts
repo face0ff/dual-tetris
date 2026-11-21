@@ -1,3 +1,18 @@
+export type AbilityRarity = 'common' | 'rare' | 'epic' | 'legendary';
+export type AbilityEffectType = 'heal' | 'freeze' | 'destroy_cell' | 'joker';
+
+export interface AbilityDefinition {
+  id: string;
+  name: string;
+  color: 1 | 2 | 3 | 4;
+  rarity: AbilityRarity;
+  energyCost: number;
+  description: string;
+  effectType: AbilityEffectType;
+  allowWhenFrozen?: boolean;
+  params: Record<string, number>;
+}
+
 export interface GameConfig {
   /** Ширина поля в клетках (3.1) */
   boardWidth: number;
@@ -49,6 +64,10 @@ export interface GameConfig {
   energyMax: number;
   /** Автоматическое срабатывание цветовых эффектов при сжигании линии */
   autoColorEffects: boolean;
+  /** Четыре слота способностей по умолчанию (Фаза 1Б) */
+  defaultLoadout: [string | null, string | null, string | null, string | null];
+  /** Реестр доступных способностей (Фаза 1Б) */
+  abilities: Record<string, AbilityDefinition>;
   /** Частота тика сервера в Гц (4) */
   serverTickHz: number;
   /** Частота отправки снапшотов в Гц (4) */
@@ -109,7 +128,54 @@ export const DEFAULT_CONFIG: GameConfig = {
   redMeteorsPerPower: 2,
   yellowExtraJokers: 3,
   energyMax: 100,
-  autoColorEffects: true,
+  autoColorEffects: false,
+  defaultLoadout: ['heal', 'freeze', 'destroy_cell', 'joker'],
+  abilities: {
+    heal: {
+      id: 'heal',
+      name: 'Лечение',
+      color: 1,
+      rarity: 'common',
+      energyCost: 15,
+      description: 'Восстанавливает 15 HP (работает даже в заморозке)',
+      effectType: 'heal',
+      allowWhenFrozen: true,
+      params: { amount: 15 },
+    },
+    freeze: {
+      id: 'freeze',
+      name: 'Заморозка',
+      color: 2,
+      rarity: 'common',
+      energyCost: 20,
+      description: 'Замораживает управление соперника на 2.5 сек',
+      effectType: 'freeze',
+      allowWhenFrozen: false,
+      params: { duration: 2.5 },
+    },
+    destroy_cell: {
+      id: 'destroy_cell',
+      name: 'Метеоры',
+      color: 3,
+      rarity: 'common',
+      energyCost: 18,
+      description: 'Уничтожает 5 случайных кубиков соперника',
+      effectType: 'destroy_cell',
+      allowWhenFrozen: false,
+      params: { count: 5 },
+    },
+    joker: {
+      id: 'joker',
+      name: 'Джокеры',
+      color: 4,
+      rarity: 'common',
+      energyCost: 16,
+      description: 'Даёт 2 проникающих джокера 1×1',
+      effectType: 'joker',
+      allowWhenFrozen: false,
+      params: { count: 2 },
+    },
+  },
   serverTickHz: 30,
   snapshotHz: 15,
   maxInputsPerSec: 30,

@@ -362,8 +362,48 @@ function processGameEvents(events: GameEvent[]): void {
         }
         break;
       }
+      case 'ability_activated': {
+        const def = config.abilities[ev.abilityId];
+        const abilityName = def ? def.name : ev.abilityId;
+        addMsg(S.msgAbilityUsed(getPlayerLabel(ev.player), abilityName));
+        if (ev.player === youIndex) {
+          energyPulse[ev.slotIndex] = 0.5;
+          sfx.rotate();
+        }
+        break;
+      }
     }
   }
+}
+
+let abilityReqSeq = 1;
+function sendActivateAbility(slotIndex: number): void {
+  if (roomState !== 'playing' || paused || !latestSnapshot) return;
+  const requestId = `ab_${youIndex}_${Date.now()}_${abilityReqSeq++}`;
+  sendMsg({
+    type: 'activate_ability',
+    slotIndex,
+    requestId,
+  });
+}
+
+function getSlotHitAtClientPos(clientX: number, clientY: number): number {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return -1;
+  const cx = ((clientX - rect.left) / rect.width) * CW;
+  const cy = ((clientY - rect.top) / rect.height) * CH;
+  const slotY = MT + BH + 32;
+  const slotH = 38;
+  if (cy < slotY - 4 || cy > slotY + slotH + 6) return -1;
+  const gap = 6;
+  const slotW = (BW - gap * 3) / 4;
+  for (let i = 0; i < 4; i++) {
+    const sx = BX + i * (slotW + gap);
+    if (cx >= sx && cx <= sx + slotW) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 /** Применяет локальную команду к предсказанной активной фигуре (включая проникающий джокер) */
@@ -723,11 +763,11 @@ btnRematch.addEventListener('click', () => {
   sendMsg({ type: 'rematch' });
 });
 
-// Клавиатурное управление (раздел 6)
+// Клавиатурное управление (раздел 6 + клавиши 1..4 для активации способностей)
 window.addEventListener('keydown', (e) => {
   if (roomState !== 'playing') return;
   const k = e.key;
-  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(k)) {
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', '1', '2', '3', '4'].includes(k)) {
     e.preventDefault();
   }
   if (k === 'ArrowLeft') sendGameInput('L');
@@ -735,6 +775,17 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'ArrowDown') sendGameInput('SD');
   else if (k === 'ArrowUp') sendGameInput('ROT');
   else if (k === ' ') sendGameInput('HD');
+  else if (k >= '1' && k <= '4') sendActivateAbility(Number(k) - 1);
+});
+
+// Клик мышью по кнопкам способностей на ПК
+canvas.addEventListener('mousedown', (e) => {
+  if (roomState !== 'playing') return;
+  const hitSlot = getSlotHitAtClientPos(e.clientX, e.clientY);
+  if (hitSlot !== -1) {
+    e.preventDefault();
+    sendActivateAbility(hitSlot);
+  }
 });
 
 // Мобильное управление свайпами
@@ -758,6 +809,12 @@ canvas.addEventListener(
   (e) => {
     e.preventDefault();
     const t = e.touches[0];
+    const hitSlot = getSlotHitAtClientPos(t.clientX, t.clientY);
+    if (hitSlot !== -1 && roomState === 'playing') {
+      T = null;
+      sendActivateAbility(hitSlot);
+      return;
+    }
     const n = performance.now();
     T = {
       x: t.clientX,
@@ -1029,40 +1086,74 @@ function drawPlayerBoard(playerIndex: 0 | 1, isOpponent: boolean, barColor: stri
   g2.font = 'bold 10px system-ui';
   g2.fillText(`${Math.max(0, Math.round(hp))} / ${config.maxHp}`, BX + 5, by + 9.5);
 
-  // Четыре резервуара энергии игрока внизу экрана (Фаза 1А)
+  // Панель из 4 слотов способностей и энергии игрока внизу экрана (Фаза 1А + 1Б)
   if (!isOpponent) {
-    const eVals = [energy.green, energy.blue, energy.red, energy.yellow];
-    const eLabels = ['ЗЕЛ', 'СИН', 'КРА', 'ЖЁЛ'];
+    const eByColor: Record<1 | 2 | 3 | 4, number> = {
+      1: energy.green,
+      2: energy.blue,
+      3: energy.red,
+      4: energy.yellow,
+    };
+    const slots = latestSnapshot.abilities?.[playerIndex] ?? [
+      { abilityId: config.defaultLoadout[0] },
+      { abilityId: config.defaultLoadout[1] },
+      { abilityId: config.defaultLoadout[2] },
+      { abilityId: config.defaultLoadout[3] },
+    ];
     const gap = 6;
     const slotW = (BW - gap * 3) / 4;
-    const slotY = MT + BH + 34;
-    const slotH = 34;
+    const slotY = MT + BH + 32;
+    const slotH = 38;
 
     for (let i = 0; i < 4; i++) {
       const sx = BX + i * (slotW + gap);
       const pulse = energyPulse[i] > 0;
-      g2.fillStyle = pulse ? '#1e293b' : '#111827';
+      const slot = slots[i];
+      const def = slot?.abilityId ? config.abilities[slot.abilityId] : undefined;
+
+      if (!def) {
+        g2.fillStyle = '#0f172a';
+        g2.fillRect(sx, slotY, slotW, slotH);
+        g2.lineWidth = 1;
+        g2.strokeStyle = '#1e293b';
+        g2.strokeRect(sx, slotY, slotW, slotH);
+        g2.fillStyle = '#64748b';
+        g2.font = '10px system-ui';
+        g2.textAlign = 'center';
+        g2.fillText(S.emptySlot, sx + slotW / 2, slotY + 23);
+        continue;
+      }
+
+      const curEnergy = eByColor[def.color] ?? 0;
+      const frozenBlocked = freeze > 0 && !def.allowWhenFrozen;
+      const isReady = curEnergy >= def.energyCost && !frozenBlocked;
+      const colHex = COL[def.color];
+
+      g2.fillStyle = isReady ? '#17253b' : '#0f172a';
       g2.fillRect(sx, slotY, slotW, slotH);
 
-      const ratio = Math.min(1, eVals[i] / Math.max(1, config.energyMax));
-      g2.fillStyle = COL[i + 1];
-      g2.globalAlpha = pulse ? 0.45 : 0.25;
-      g2.fillRect(sx, slotY, slotW * ratio, slotH);
+      // Полоса накопления энергии к стоимости способности
+      const fillRatio = Math.min(1, curEnergy / Math.max(1, def.energyCost));
+      g2.fillStyle = colHex;
+      g2.globalAlpha = isReady ? 0.38 : 0.16;
+      g2.fillRect(sx, slotY, slotW * fillRatio, slotH);
       g2.globalAlpha = 1;
 
-      g2.lineWidth = pulse ? 2 : 1;
-      g2.strokeStyle = pulse ? COL[i + 1] : '#334155';
+      g2.lineWidth = isReady || pulse ? 2 : 1;
+      g2.strokeStyle = isReady || pulse ? colHex : '#334155';
       g2.strokeRect(sx, slotY, slotW, slotH);
 
-      g2.fillStyle = COL[i + 1];
-      g2.font = 'bold 10px system-ui';
+      // Название способности и клавиша [1..4]
+      g2.fillStyle = isReady ? '#ffffff' : '#94a3b8';
+      g2.font = 'bold 10.5px system-ui';
       g2.textAlign = 'left';
-      g2.fillText(eLabels[i], sx + 6, slotY + 13);
+      g2.fillText(`${i + 1}.${def.name}`, sx + 5, slotY + 14);
 
-      g2.fillStyle = '#f8fafc';
-      g2.font = 'bold 12px system-ui';
+      // Текущая энергия / Стоимость
+      g2.fillStyle = isReady ? colHex : '#cbd5e1';
+      g2.font = 'bold 11.5px system-ui';
       g2.textAlign = 'right';
-      g2.fillText(`${eVals[i]}/${config.energyMax}`, sx + slotW - 6, slotY + 27);
+      g2.fillText(`${curEnergy}/${def.energyCost}`, sx + slotW - 5, slotY + 31);
     }
     g2.textAlign = 'left';
   }

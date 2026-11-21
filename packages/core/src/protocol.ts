@@ -41,6 +41,11 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('start_bot_match'),
     name: z.string().max(24).optional(),
   }),
+  z.object({
+    type: z.literal('activate_ability'),
+    slotIndex: z.number().int().min(0).max(3),
+    requestId: z.string().min(1).max(64),
+  }),
 ]);
 
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
@@ -75,6 +80,20 @@ export interface EnergyState {
   yellow: number;
 }
 
+export interface AbilitySlot {
+  abilityId: string | null;
+}
+
+export type AbilitySlots = [AbilitySlot, AbilitySlot, AbilitySlot, AbilitySlot];
+
+export type AbilityErrorCode =
+  | 'ABILITY_NOT_FOUND'
+  | 'EMPTY_SLOT'
+  | 'NOT_ENOUGH_ENERGY'
+  | 'MATCH_NOT_PLAYING'
+  | 'ABILITY_NOT_AVAILABLE'
+  | 'DUPLICATE_REQUEST';
+
 export interface WaveState {
   id: number;
   /** Индекс стрелка (0 или 1) */
@@ -104,6 +123,14 @@ export type GameEvent =
       player: 0 | 1;
       gained: EnergyState;
       total: EnergyState;
+    }
+  | {
+      type: 'ability_activated';
+      player: 0 | 1;
+      slotIndex: number;
+      abilityId: string;
+      energyColor: 1 | 2 | 3 | 4;
+      energySpent: number;
     };
 
 export interface SnapshotMessage {
@@ -116,6 +143,7 @@ export interface SnapshotMessage {
   freeze: [number, number];
   jokers: [number, number];
   energy: [EnergyState, EnergyState];
+  abilities: [AbilitySlots, AbilitySlots];
   next: [PieceShape, PieceShape];
   cur: [ActivePiece, ActivePiece];
   waves: WaveState[];

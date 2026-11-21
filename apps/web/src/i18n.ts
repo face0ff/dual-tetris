@@ -38,6 +38,8 @@ export const RU_STRINGS = {
   msgImpact: (who: string, dmg: number, rows: number) =>
     `${who} попал −${dmg} HP, рядов: ${rows}`,
   msgOverflow: (who: string, dmg: number) => `${who}: переполнение −${dmg} HP`,
+  msgAbilityUsed: (who: string, name: string) => `⚡ ${who}: ${name}!`,
+  emptySlot: 'Пусто',
   errRoomNotFound: 'Комната с таким кодом не найдена',
   errRoomFull: 'В этой комнате уже два игрока',
   errDisconnected: 'Соединение с сервером потеряно, переподключаемся...',

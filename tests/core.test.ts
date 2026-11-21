@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_CONFIG,
   SeededRng,
+  activateAbility,
   applyPlayerInput,
   applyWaveImpact,
   createMatch,
@@ -87,7 +88,7 @@ describe('Ядро DUAL TETRIS (@dual-tetris/core)', () => {
   });
 
   it('Эффекты цветов: лечение не выше 100, заморозка блокирует ввод, метеориты и 4 джокера подряд', () => {
-    const state = createMatch(999);
+    const state = createMatch(999, { ...DEFAULT_CONFIG, autoColorEffects: true });
     const p0 = state.players[0];
     const p1 = state.players[1];
     const W = state.config.boardWidth;
@@ -326,5 +327,82 @@ describe('Ядро DUAL TETRIS (@dual-tetris/core)', () => {
 
     expect(p0.energy.green).toBe(state.config.energyMax); // 95 + 30 -> ограничено 100
     expect(p0.energy.blue).toBe(3 + 2); // 3 + 2 = 5
+  });
+
+  it('Фаза 1Б: ручная активация способностей, списание энергии, защита от дублей requestId, пустой слот и заморозка', () => {
+    const state = createMatch(2027);
+    const p0 = state.players[0];
+    const p1 = state.players[1];
+
+    // 1. При нехватке энергии способность не активируется и состояние не меняется
+    expect(activateAbility(state, 0, 0, 'req-1')).toEqual({
+      ok: false,
+      errorCode: 'NOT_ENOUGH_ENERGY',
+    });
+
+    // 2. Неверный индекс слота и пустой слот
+    expect(activateAbility(state, 0, 99, 'req-bad')).toEqual({
+      ok: false,
+      errorCode: 'ABILITY_NOT_FOUND',
+    });
+    p0.abilities[3] = { abilityId: null };
+    expect(activateAbility(state, 0, 3, 'req-empty')).toEqual({
+      ok: false,
+      errorCode: 'EMPTY_SLOT',
+    });
+    p0.abilities[3] = { abilityId: 'joker' };
+
+    // 3. Активация Лечения (слот 0, зелёная энергия, цена 15 -> +15 HP)
+    p0.hp = 70;
+    p0.energy.green = 20;
+    const healRes = activateAbility(state, 0, 0, 'req-heal-1');
+    expect(healRes.ok).toBe(true);
+    expect(p0.hp).toBe(85);
+    expect(p0.energy.green).toBe(5);
+
+    // Повторный запрос с тем же requestId не списывает энергию и не лечит повторно
+    p0.energy.green = 25;
+    expect(activateAbility(state, 0, 0, 'req-heal-1')).toEqual({
+      ok: false,
+      errorCode: 'DUPLICATE_REQUEST',
+    });
+    expect(p0.hp).toBe(85);
+    expect(p0.energy.green).toBe(25);
+
+    // 4. Активация Заморозки (слот 1, синяя энергия, цена 20 -> заморозка соперника 2.5с)
+    p0.energy.blue = 25;
+    expect(activateAbility(state, 0, 1, 'req-freeze-1').ok).toBe(true);
+    expect(p0.energy.blue).toBe(5);
+    expect(p1.freezeRemaining).toBeCloseTo(2.5, 5);
+
+    // Замороженный игрок p1 НЕ может активировать атакующие способности (например, слот 1 freeze),
+    // но МОЖЕТ активировать Лечение (слот 0, allowWhenFrozen: true)
+    p1.energy.blue = 30;
+    p1.energy.green = 20;
+    p1.hp = 60;
+    expect(activateAbility(state, 1, 1, 'req-p1-freeze')).toEqual({
+      ok: false,
+      errorCode: 'ABILITY_NOT_AVAILABLE',
+    });
+    expect(activateAbility(state, 1, 0, 'req-p1-heal').ok).toBe(true);
+    expect(p1.hp).toBe(75);
+    expect(p1.energy.green).toBe(5);
+
+    // 5. Активация Метеоров / Destroy Cell (слот 2, красная энергия, цена 18 -> удаляет 5 кубиков соперника)
+    for (let c = 0; c < 7; c++) {
+      p1.board[14][c] = 1;
+    }
+    p0.energy.red = 20;
+    expect(activateAbility(state, 0, 2, 'req-meteor-1').ok).toBe(true);
+    expect(p0.energy.red).toBe(2);
+    const remainingOnP1 = p1.board[14].filter((v) => v !== 0).length;
+    expect(remainingOnP1).toBe(2);
+
+    // 6. Активация Джокеров (слот 3, жёлтая энергия, цена 16 -> 2 джокера 1x1)
+    p0.energy.yellow = 16;
+    expect(activateAbility(state, 0, 3, 'req-joker-1').ok).toBe(true);
+    expect(p0.energy.yellow).toBe(0);
+    expect(p0.next.c).toBe(5);
+    expect(p0.jokersRemaining).toBe(1);
   });
 });

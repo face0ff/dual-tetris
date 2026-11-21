@@ -228,4 +228,70 @@ describe('Интеграционные и нагрузочные тесты се
       c.close();
     }
   });
+
+  it('Фаза 1А и 1Б по WebSocket: передача энергии и слотов, ручная активация способности, защита от дублей requestId и переподключение', async () => {
+    server = createDualTetrisServer();
+    const port = await server.listen(0, '127.0.0.1');
+
+    const c1 = await TestWsClient.connect(port);
+    const c2 = await TestWsClient.connect(port);
+
+    c1.send({ type: 'create_room', name: 'P1' });
+    const created = await c1.waitFor('room');
+    const p1Token = created.sessionToken;
+
+    c2.send({ type: 'join_room', code: created.code, name: 'P2' });
+    await c2.waitFor('room', (r) => r.players.length === 2);
+
+    c1.send({ type: 'ready', value: true });
+    c2.send({ type: 'ready', value: true });
+
+    await c1.waitFor('match_start', undefined, 6000);
+    await c2.waitFor('match_start', undefined, 6000);
+
+    // 1. Попытка активировать способность при 0 энергии возвращает ошибку NOT_ENOUGH_ENERGY
+    c1.send({ type: 'activate_ability', slotIndex: 1, requestId: 'ws-req-0' });
+    const errMsg = await c1.waitFor('error', (e) => e.code === 'NOT_ENOUGH_ENERGY');
+    expect(errMsg.code).toBe('NOT_ENOUGH_ENERGY');
+
+    // 2. Начислим игроку 0 на сервере 40 синей энергии и активируем слот 1 (Заморозка, цена 20)
+    const room = server.rooms.get(created.code)!;
+    room.match!.players[0].energy.blue = 40;
+
+    c1.messages.length = 0;
+    c2.messages.length = 0;
+
+    c1.send({ type: 'activate_ability', slotIndex: 1, requestId: 'ws-freeze-1' });
+    // Повторная отправка того же requestId
+    c1.send({ type: 'activate_ability', slotIndex: 1, requestId: 'ws-freeze-1' });
+
+    const snap1 = await c1.waitFor(
+      'snapshot',
+      (s) => s.events.some((ev) => ev.type === 'ability_activated'),
+      3000
+    );
+    const snap2 = await c2.waitFor(
+      'snapshot',
+      (s) => s.events.some((ev) => ev.type === 'ability_activated'),
+      3000
+    );
+
+    // Энергия списалась ровно один раз (40 - 20 = 20), а игрок 2 заморожен
+    expect(snap1.energy[0].blue).toBe(20);
+    expect(snap2.freeze[1]).toBeGreaterThan(2.0);
+
+    // 3. Проверка сохранения энергии и слотов при переподключении
+    c1.close();
+    await c2.waitFor('room', (r) => r.paused === true, 3000);
+
+    const c1Re = await TestWsClient.connect(port);
+    c1Re.send({ type: 'join_room', code: created.code, sessionToken: p1Token });
+    const reSnap = await c1Re.waitFor('snapshot', undefined, 3000);
+    expect(reSnap.energy[0].blue).toBe(20);
+    expect(reSnap.abilities[0]).toHaveLength(4);
+    expect(reSnap.abilities[0][1].abilityId).toBe('freeze');
+
+    c1Re.close();
+    c2.close();
+  });
 });

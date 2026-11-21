@@ -1,5 +1,7 @@
-import { DEFAULT_CONFIG, type GameConfig } from './config.js';
+import { DEFAULT_CONFIG, type AbilityDefinition, type GameConfig } from './config.js';
 import type {
+  AbilityErrorCode,
+  AbilitySlots,
   ActivePiece,
   EnergyState,
   GameEvent,
@@ -96,6 +98,8 @@ export interface PlayerState {
   freezeRemaining: number;
   jokersRemaining: number;
   energy: EnergyState;
+  abilities: AbilitySlots;
+  processedAbilityRequests: Set<string>;
   rng: SeededRng;
   ackSeq: number;
 }
@@ -190,6 +194,13 @@ export function createMatch(seed: number, config: GameConfig = DEFAULT_CONFIG): 
         red: 0,
         yellow: 0,
       },
+      abilities: [
+        { abilityId: config.defaultLoadout[0] ?? null },
+        { abilityId: config.defaultLoadout[1] ?? null },
+        { abilityId: config.defaultLoadout[2] ?? null },
+        { abilityId: config.defaultLoadout[3] ?? null },
+      ],
+      processedAbilityRequests: new Set<string>(),
       rng,
       ackSeq: 0,
     };
@@ -452,6 +463,182 @@ export function applyWaveImpact(state: MatchState, wave: WaveState): void {
   }
 }
 
+export type AbilityActivationResult =
+  | { ok: true; ability: AbilityDefinition }
+  | { ok: false; errorCode: AbilityErrorCode };
+
+function getEnergyKeyByColor(color: 1 | 2 | 3 | 4): keyof EnergyState {
+  switch (color) {
+    case 1:
+      return 'green';
+    case 2:
+      return 'blue';
+    case 3:
+      return 'red';
+    case 4:
+      return 'yellow';
+  }
+}
+
+export function applyHealAbility(
+  state: MatchState,
+  playerIndex: 0 | 1,
+  params: Record<string, number>
+): void {
+  const p = state.players[playerIndex];
+  const amount = Math.max(1, params.amount ?? 15);
+  p.hp = Math.min(state.config.maxHp, p.hp + amount);
+  state.events.push({
+    type: 'heal',
+    player: playerIndex,
+    amount,
+    hp: p.hp,
+  });
+}
+
+export function applyFreezeAbility(
+  state: MatchState,
+  playerIndex: 0 | 1,
+  params: Record<string, number>
+): void {
+  const targetIndex: 0 | 1 = playerIndex === 0 ? 1 : 0;
+  const target = state.players[targetIndex];
+  const duration = Math.max(0.5, params.duration ?? 2.5);
+  target.freezeRemaining = Math.max(target.freezeRemaining, duration);
+  state.events.push({
+    type: 'freeze',
+    target: targetIndex,
+    duration,
+  });
+}
+
+export function applyDestroyCellAbility(
+  state: MatchState,
+  playerIndex: 0 | 1,
+  params: Record<string, number>
+): void {
+  const targetIndex: 0 | 1 = playerIndex === 0 ? 1 : 0;
+  const target = state.players[targetIndex];
+  const attacker = state.players[playerIndex];
+  const { config } = state;
+
+  const occupiedCells: Array<[number, number]> = [];
+  for (let r = 0; r < config.boardHeight; r++) {
+    for (let c = 0; c < config.boardWidth; c++) {
+      if (target.board[r][c] !== 0) {
+        occupiedCells.push([r, c]);
+      }
+    }
+  }
+  const destroyCount = Math.min(occupiedCells.length, Math.max(1, params.count ?? 5));
+  const destroyed: Array<[number, number]> = [];
+  for (let k = 0; k < destroyCount; k++) {
+    const pickIdx = attacker.rng.nextInt(0, occupiedCells.length - 1);
+    const [ry, rx] = occupiedCells.splice(pickIdx, 1)[0];
+    target.board[ry][rx] = 0;
+    destroyed.push([ry, rx]);
+  }
+  state.events.push({
+    type: 'meteor',
+    target: targetIndex,
+    cells: destroyed,
+  });
+}
+
+export function applyJokerAbility(
+  state: MatchState,
+  playerIndex: 0 | 1,
+  params: Record<string, number>
+): void {
+  const p = state.players[playerIndex];
+  const count = Math.max(1, params.count ?? 2);
+  if (p.next.c === 5) {
+    p.jokersRemaining += count;
+  } else {
+    p.next = { m: [[1]], c: 5 };
+    p.jokersRemaining += count - 1;
+  }
+  state.events.push({
+    type: 'jokers',
+    player: playerIndex,
+    count,
+  });
+}
+
+/** Ручная активация способности игроком из слота slotIndex (Фаза 1Б) */
+export function activateAbility(
+  state: MatchState,
+  playerIndex: 0 | 1,
+  slotIndex: number,
+  requestId?: string
+): AbilityActivationResult {
+  if (state.finished) {
+    return { ok: false, errorCode: 'MATCH_NOT_PLAYING' };
+  }
+  const p = state.players[playerIndex];
+
+  if (requestId) {
+    if (p.processedAbilityRequests.has(requestId)) {
+      return { ok: false, errorCode: 'DUPLICATE_REQUEST' };
+    }
+  }
+
+  if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 3) {
+    return { ok: false, errorCode: 'ABILITY_NOT_FOUND' };
+  }
+
+  const slot = p.abilities[slotIndex];
+  if (!slot || !slot.abilityId) {
+    return { ok: false, errorCode: 'EMPTY_SLOT' };
+  }
+
+  const def = state.config.abilities[slot.abilityId];
+  if (!def) {
+    return { ok: false, errorCode: 'ABILITY_NOT_FOUND' };
+  }
+
+  if (p.freezeRemaining > 0 && !def.allowWhenFrozen) {
+    return { ok: false, errorCode: 'ABILITY_NOT_AVAILABLE' };
+  }
+
+  const energyKey = getEnergyKeyByColor(def.color);
+  if (p.energy[energyKey] < def.energyCost) {
+    return { ok: false, errorCode: 'NOT_ENOUGH_ENERGY' };
+  }
+
+  // Списываем энергию и фиксируем requestId
+  p.energy[energyKey] -= def.energyCost;
+  if (requestId) {
+    p.processedAbilityRequests.add(requestId);
+  }
+
+  state.events.push({
+    type: 'ability_activated',
+    player: playerIndex,
+    slotIndex,
+    abilityId: def.id,
+    energyColor: def.color,
+    energySpent: def.energyCost,
+  });
+
+  switch (def.effectType) {
+    case 'heal':
+      applyHealAbility(state, playerIndex, def.params);
+      break;
+    case 'freeze':
+      applyFreezeAbility(state, playerIndex, def.params);
+      break;
+    case 'destroy_cell':
+      applyDestroyCellAbility(state, playerIndex, def.params);
+      break;
+    case 'joker':
+      applyJokerAbility(state, playerIndex, def.params);
+      break;
+  }
+
+  return { ok: true, ability: def };
+}
+
 /** Применение одной команды игрока (L, R, ROT, SD, HD) */
 export function applyPlayerInput(
   state: MatchState,
@@ -687,6 +874,10 @@ export function createSnapshot(state: MatchState, clearEvents = true): SnapshotM
     freeze: [state.players[0].freezeRemaining, state.players[1].freezeRemaining],
     jokers: [state.players[0].jokersRemaining, state.players[1].jokersRemaining],
     energy: [{ ...state.players[0].energy }, { ...state.players[1].energy }],
+    abilities: [
+      state.players[0].abilities.map((s) => ({ ...s })) as AbilitySlots,
+      state.players[1].abilities.map((s) => ({ ...s })) as AbilitySlots,
+    ],
     next: [clonePiece(state.players[0].next), clonePiece(state.players[1].next)],
     cur: [cloneActive(state.players[0].cur), cloneActive(state.players[1].cur)],
     waves: state.waves.map((w) => ({ ...w })),

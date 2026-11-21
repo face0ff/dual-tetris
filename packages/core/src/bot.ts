@@ -1,5 +1,11 @@
 import type { GameConfig } from './config.js';
-import { applyPlayerInput, fits, rotateMatrixCW, type MatchState } from './engine.js';
+import {
+  activateAbility,
+  applyPlayerInput,
+  fits,
+  rotateMatrixCW,
+  type MatchState,
+} from './engine.js';
 import { SeededRng } from './rng.js';
 
 export interface BotPlan {
@@ -124,6 +130,19 @@ export class BotController {
   public step(state: MatchState, dt: number): void {
     if (state.finished) return;
     const p = state.players[this.playerIndex];
+
+    // Бот проверяет возможность использовать способности (лечение работает даже в заморозке)
+    for (let slotIdx = 0; slotIdx < 4; slotIdx++) {
+      const slot = p.abilities[slotIdx];
+      if (!slot?.abilityId) continue;
+      const def = state.config.abilities[slot.abilityId];
+      if (!def) continue;
+      if (def.effectType === 'heal' && p.hp > state.config.maxHp - (def.params.amount ?? 15)) {
+        continue;
+      }
+      activateAbility(state, this.playerIndex, slotIdx);
+    }
+
     if (p.freezeRemaining > 0) return;
 
     // Если появилась новая фигура, сбрасываем план

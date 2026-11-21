@@ -9,6 +9,7 @@ import {
   ClientMessageSchema,
   DEFAULT_CONFIG,
   PROTOCOL_VERSION,
+  activateAbility,
   applyPlayerInput,
   createMatch,
   createSnapshot,
@@ -89,6 +90,8 @@ export function createDualTetrisServer(
   const config: GameConfig = {
     ...DEFAULT_CONFIG,
     ...customConfig,
+    defaultLoadout: customConfig.defaultLoadout ?? DEFAULT_CONFIG.defaultLoadout,
+    abilities: { ...DEFAULT_CONFIG.abilities, ...(customConfig.abilities ?? {}) },
     bot: { ...DEFAULT_CONFIG.bot, ...(customConfig.bot ?? {}) },
     touch: { ...DEFAULT_CONFIG.touch, ...(customConfig.touch ?? {}) },
   };
@@ -541,6 +544,20 @@ export function createDualTetrisServer(
         if (msg.a === 'HD') {
           room.dirtySnapshot = true;
         }
+        return;
+      }
+
+      if (msg.type === 'activate_ability') {
+        if (room.state !== 'playing' || room.paused || !room.match) {
+          send(ws, { type: 'error', code: 'MATCH_NOT_PLAYING' });
+          return;
+        }
+        const res = activateAbility(room.match, playerIndex, msg.slotIndex, msg.requestId);
+        if (!res.ok) {
+          send(ws, { type: 'error', code: res.errorCode });
+          return;
+        }
+        room.dirtySnapshot = true;
         return;
       }
 
